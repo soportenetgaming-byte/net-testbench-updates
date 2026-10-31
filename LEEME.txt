@@ -1,0 +1,286 @@
+﻿NET Gaming - Banco de pruebas (NET-TestBench) v2.9
+===================================================
+
+QUÉ ES
+Un script de PowerShell para testear CPU, motherboard, RAM y discos usados en el banco.
+Por cada equipo guarda en "Reportes":
+- .pdf  : informe para el cliente (A4, con logo), listo para mandar o imprimir. Es el
+          único archivo que queda a la vista en Reportes. Lo genera solo con Edge
+          (viene con Windows); si no pudiera, usar el .html de "detalle".
+- historial.csv : una línea por equipo testeado (se abre con Excel). Lo usa el
+                  programa para comparar con equipos iguales.
+En "Reportes\detalle" (no hace falta tocarlos, pero no borrarlos):
+- .txt  : reporte técnico completo (todo lo que pasó en la consola, para el taller).
+- .html : el mismo informe del cliente en formato web. De ahí se hace el PDF y es lo
+          que muestra la pantalla del mostrador (NET-Receptor).
+- .json : los mismos datos en formato para sistemas (para la integración con n8n).
+Resultado final: SIN FALLAS / APTO CON OBSERVACIONES / NO APTO.
+
+LOGO Y COLORES DEL INFORME
+El logo viene incluido en "tools\logo.png" (si se cambia, mismo nombre). Colores de marca:
+magenta #EA06CF, rosa #F13E88, naranja #FFA601 (en el script: buscar "--grad").
+
+TÉCNICOS
+El nombre que sale en el informe se toma de "tecnicos.txt" (al lado del script).
+Hoy tiene un solo nombre (Nehuen) y se usa directo, sin preguntar.
+Para sumar a alguien: escribir su nombre en el campo Técnico al empezar (queda guardado),
+o agregarlo en una línea nueva de tecnicos.txt. Con dos o más nombres aparece una lista.
+
+ACTUALIZACIÓN AUTOMÁTICA
+Al abrirse, el programa se fija si hay una versión nueva publicada y, si la hay, la baja,
+la verifica (que llegue completa y sin errores) y arranca directamente con esa. No hay que
+copiar nada con el pendrive. Sin internet sigue con la versión que tiene.
+- La versión anterior queda guardada en tools\versiones-anteriores (las últimas 5): para
+  volver atrás, copiar la que se quiera al lado de Iniciar-TestBench.bat con el nombre
+  NET-TestBench.ps1 y crear config.txt con la línea  actualizar=no
+- Para desactivarla en un pendrive: config.txt (al lado del script) con  actualizar=no
+- Se publica en github.com/soportenetgaming-byte/net-testbench-updates (solo el programa,
+  sin la clave del taller). El receptor (NET-Receptor) no se actualiza solo.
+
+CÓMO SE USA
+1. Copiar la carpeta entera a un pendrive o al escritorio de la PC de banco.
+   El programa nunca le manda comandos SMART ni escribe datos de prueba en el pendrive
+   desde donde corre, ni en discos USB. Si igual el pendrive se desconecta, los reportes
+   se guardan en el Escritorio (carpeta NET-TestBench-Reportes) y se avisa en pantalla.
+2. Doble clic en Iniciar-TestBench.bat (pide permisos de administrador).
+   Se abre una ventana con los pasos. La ventana de PowerShell queda minimizada:
+   es el motor de las pruebas, no hay que cerrarla (se cierra sola con la interfaz).
+3. Cargar la orden y tocar Empezar (Enter).
+4. Seguir los pasos en orden, o tocar "Correr protocolo completo" (P):
+   1  Chequeo general .............. 1 min   (si marca drivers faltantes, correr el paso D)
+   D  Drivers: buscar e instalar ... 5-20 min (necesita internet; después reiniciar)
+   2  Discos: SMART + autotest ..... 3 min
+   3  CPU: todos los núcleos ....... 5-30 min
+   4  CPU: núcleo por núcleo ....... ~5-50 min según el modo
+   5  Video: identidad + VRAM + stress ~15 min (si tiene placa de video)
+   F  Fuente: CPU + GPU al 100% .... 10 min  (si tiene placa de video)
+   6  RAM: TestMem5 ................ 30+ min (automático; con XMP/EXPO activado)
+   Opcionales: 7 lectura de disco, 8 escritura + verificación, 9 otra prueba externa.
+   Cada paso tiene "¿Qué hace?" con la explicación completa.
+5. "Generar y abrir informe" (I): arma el informe para el cliente en PDF y lo abre.
+6. "Nuevo equipo" (N) para el siguiente: el informe del anterior se guarda solo.
+
+ENVIAR EL INFORME A TU PC O A LA PANTALLA DEL MOSTRADOR
+1. Instalar NET-Receptor (carpeta NET-Receptor de este zip) en tu PC y en la del mostrador:
+   doble clic en Instalar-Receptor.bat. Se hace una sola vez. Ver LEEME-Receptor.txt.
+2. En el testbench, en Resultado > Enviar informe aparecen las PCs encontradas en la red:
+   "Enviar a Mostrador" lo muestra en la pantalla para el cliente; "Enviar a PC Nehuen" lo
+   guarda en Documentos\NET-Informes de tu PC y te avisa.
+3. "enviar siempre": cada informe nuevo se manda solo a esa PC al generarlo.
+Funciona por la red del local, sin internet. La clave del taller ya viene puesta igual en
+envio.txt (testbench) y en NET-Receptor\clave.txt.
+En el menú de consola: opción E.
+
+ATAJOS DE TECLADO (en la interfaz)
+1 a 9 = correr ese paso · P = protocolo completo · Esc = cortar la prueba en curso
+I = informe · N = nuevo equipo · H = herramientas · ? = ayuda
+En las preguntas: S / N para sí y no, números para elegir, Enter = opción marcada.
+
+MODO CONSOLA
+Iniciar-Consola.bat abre el menú de texto de siempre (mismas pruebas).
+
+HERRAMIENTAS (se bajan solas)
+Al abrir el script, si falta algo en la carpeta "tools" ofrece descargarlo:
+- smartctl (smartmontools): SMART y autotest. Se instala con winget o el instalador
+  oficial y se copia smartctl.exe a "tools".
+- Prime95 (mersenne.org), con el modo "solo stress test" ya configurado.
+- CoreCycler (GitHub), que trae y-cruncher incluido.
+- memtest_vulkan (GitHub, licencia zlib): test de memoria de video (VRAM).
+- LibreHardwareMonitor (GitHub): temperaturas, voltajes y frecuencias. Libre también
+  para uso comercial. La primera vez puede pedir instalar el driver PawnIO para leer
+  los sensores del CPU: aceptarlo.
+Todo queda dentro de "tools": si lo bajás una vez en una PC con internet, el pendrive
+ya lo lleva para las PCs de banco sin conexión. Botón Herramientas (H): bajar, actualizar o abrir.
+Respuesta X al inicio = no volver a preguntar (se siguen pudiendo bajar desde Herramientas).
+TestMem5 no se baja solo: copiá tu carpeta de TM5 a "tools\TestMem5".
+
+LICENCIAS (importante para el local)
+- HWiNFO gratis es solo para uso personal; en un negocio se permite 14 días de prueba,
+  después hace falta HWiNFO Pro. Por eso el script usa LibreHardwareMonitor.
+- OCCT gratis también es para uso personal; en el local corresponde la versión paga.
+- FurMark 2 tampoco es libre para uso comercial. Por eso el stress de GPU es propio
+  (opción G) y la VRAM se prueba con memtest_vulkan, que sí se puede usar.
+
+TEMPERATURAS: QUÉ SIGNIFICA CADA UNA
+- Núcleo (GPU Temperature): la que muestran FurMark, GPU-Z y casi todos los programas.
+- Hotspot: el punto más caliente del chip; normalmente 10-20 °C más que el núcleo.
+  Si la diferencia pasa los 25 °C: pasta seca o disipador mal apoyado.
+- Memoria de video: la temperatura de los chips de VRAM. En GDDR6X (RTX 3070 Ti/3080/3090,
+  4070 Ti en adelante) 90-104 °C es común con carga, y baja velocidad recién cerca de 110 °C.
+  OJO: el test de VRAM (memtest_vulkan) usa la memoria al 100%, como minar, y la calienta
+  bastante más que un juego, FurMark o nuestro stress: ver 100-106 °C ahí es normal.
+  Por eso los avisos son distintos: stress: observación desde 104 °C · test de VRAM: desde 108 °C.
+  El informe del CLIENTE muestra solo la temperatura de memoria del stress (comparable con un
+  juego) y del test de VRAM solo el resultado (sin errores / con errores). La temperatura del
+  test de VRAM queda en el reporte técnico (.txt). Si pasa los 108 °C, sí sale en el informe.
+  Para comparar con HWiNFO, mirá "GPU Memory Junction Temperature" durante la MISMA prueba.
+Hotspot en NVIDIA: se lee directo del driver (NVAPI), el mismo valor que muestran GPU-Z y
+HWiNFO ("GPU Hot Spot"). Con el driver PawnIO, LibreHardwareMonitor da como hotspot el máximo
+de varios sensores internos, que en algunas placas (ej. RTX 4060) marca 15-20 °C de más.
+En el reporte técnico (.txt) queda el detalle de TODOS los sensores de temperatura de la GPU
+de cada prueba, para comparar con HWiNFO si alguna vez no coincide. Las RTX 50 no informan
+hotspot por la vía oficial (NVIDIA lo sacó). Si LibreHardwareMonitor muestra uno, sale de
+una lectura no oficial que puede marcar de más: queda en el reporte técnico, pero no genera
+avisos de hotspot ni de diferencia núcleo/hotspot.
+Para comparar con FurMark, mirá "núcleo". Los máximos son SOSTENIDOS: tienen que repetirse
+en al menos 2 de 3 lecturas seguidas. Un pico de una sola lectura (error del sensor) no
+cuenta y se anota aparte en el reporte técnico. El informe trae el gráfico de la prueba.
+
+TEMPERATURAS Y SENSORES
+Durante los stress el script lee los sensores con LibreHardwareMonitor (carpeta tools):
+temperatura y consumo del CPU, VRM, +12 V de la fuente (si la placa lo informa) y GPU.
+Avisa si el CPU llega a su límite térmico (throttling) o si los 12 V bajan de 11,4 V.
+Si dice que falta el driver PawnIO: abrir LibreHardwareMonitor una vez (Herramientas),
+aceptar instalarlo y volver a abrir el script.
+
+HISTORIAL Y COMPARACIÓN
+Cada test queda en Reportes\historial.csv. Cuando entra un CPU de un modelo que ya se
+testeó, el script compara su rendimiento contra la mediana de los anteriores y avisa si
+rinde menos de 85% (con 2 o más equipos de referencia). Lo mismo con las placas de video
+del mismo chip.
+HISTORIAL COMPARTIDO: el historial de todos los bancos se junta en el NET-Receptor de la
+PC de soporte (el que está en modo "Mi PC", archivo historial.csv en NET-Informes).
+Al empezar cada equipo y al guardar el informe, el banco baja lo que hay, lo une con lo
+suyo y lo vuelve a subir. Así las comparaciones usan los equipos de todos los pendrives.
+Sin conexión con esa PC sigue con el historial del pendrive y lo une la próxima vez.
+Hace falta el NET-Receptor 1.2 o más nuevo (reinstalarlo una vez con Instalar-Receptor.bat).
+
+ANTES DE TESTEAR UN CPU
+- Drivers de chipset y de video instalados (el chequeo de salud avisa si faltan).
+- BIOS en defaults: sin PBO, curve optimizer, undervolt ni OC. Se testea el CPU, no un ajuste.
+- XMP/EXPO apagado en la primera pasada (después se prueba la RAM con XMP).
+- Un cooler que alcance. Si el CPU llega a 95-100 °C y throttlea, el test pierde sentido.
+
+QUÉ HACE CADA OPCIÓN (números del menú de consola)
+1  Chequeo de salud: eventos WHEA/BSOD/disco desde el arranque, RAM por slot
+   (velocidad real vs nominal, memoria reservada), ancho de enlace PCIe de GPU y NVMe,
+   dispositivos con error, red, microcode (alerta Intel 13ª/14ª gen), SMART.
+2  CPU todos los núcleos: cada hilo hace cálculo flotante, SHA-256 y compresión/
+   descompresión, y compara contra un resultado de referencia. Un resultado distinto
+   = el CPU calculó mal. También vigila WHEA y la frecuencia efectiva.
+3  CPU por núcleo: lo mismo pero un hilo por vez, fijado a cada núcleo. Así cada núcleo
+   sube a su boost máximo (donde fallan los degradados y los "flojos"). Si la PC se
+   cuelga, al volver a abrir el script te dice en qué núcleo fue.
+4  SMART + autotest corto de todos los discos (necesita smartctl).
+5  Lectura de superficie de un disco (solo lee, no borra nada).
+6  Escritura + verificación (tipo H2testw) en el espacio libre de una unidad:
+   detecta NAND fallada, datos corruptos y capacidad falsa. Borra solo sus archivos
+   de prueba. No deja usarlo en la unidad del sistema.
+7  Prueba externa: elegís Prime95, y-cruncher, CoreCycler, TestMem5 u otro; el script
+   lo abre, vigila WHEA y frecuencia, y al final lee los errores de Prime95 (results.txt)
+   y de CoreCycler (su log) solo. Para el resto te pregunta si dio errores.
+D  Drivers: buscar e instalar solos (necesita internet).
+   - Chipset AMD (Ryzen/Athlon): baja la última versión de amd.com y la instala sola.
+   - Windows Update: chipset Intel, ME, Serial IO, red, audio, Wi-Fi, video Intel y el
+     resto de los dispositivos. Muestra la lista y pregunta antes de instalar. Nunca
+     instala firmware ni BIOS (eso se hace a mano).
+   - NVIDIA: identifica la placa por el ID del chip (funciona aunque no tenga driver),
+     busca el último driver oficial en el servicio de NVIDIA (~1 GB) y lo instala solo.
+     Si ya tiene driver y hay uno más nuevo, pregunta (por defecto no lo toca).
+     Ojo: el paquete de NVIDIA también instala la NVIDIA App.
+   - AMD Radeon (y gráficos integrados de Ryzen G): baja el instalador oficial de AMD,
+     que detecta la placa y baja el driver: hay que tocar Instalar.
+   - Antes de ejecutar cualquier instalador verifica la firma digital del fabricante;
+     si no coincide, lo borra y no lo instala.
+   - Lo bajado queda en tools\drivers: el próximo equipo con la misma placa no lo vuelve
+     a bajar (ojo con el espacio del pendrive: el de NVIDIA pesa ~1 GB, se puede borrar).
+   - Al final lista lo que quedó sin driver y vuelve a hacer el chequeo de drivers.
+   - Si instaló algo, REINICIAR antes de seguir con las pruebas.
+   - En el informe del cliente aparece "Drivers: Instalados" con el detalle.
+G  Video (GPU):
+   - Identidad de la placa (también corre en el chequeo, opción 1, ~2 s): lee el ID del
+     chip que tiene grabado la placa y lo compara con una base de datos de todos los chips
+     (pci.ids, incluida en el script, no necesita internet). Detecta:
+       * placas truchas: el nombre que muestra Windows no coincide con el chip real
+         (ej. una GT 430 que aparece como "GTX 1060" por BIOS o driver modificado);
+       * variantes recortadas o distintas: RX 580 2048SP, RTX 30 LHR;
+       * fabricante (y a veces el modelo exacto) según el BIOS: si la etiqueta de la placa
+         dice otra marca, tiene el BIOS de otro fabricante (cross-flash);
+       * memoria de video que informa vs la que corresponde al modelo;
+       * versión del BIOS de video;
+       * NVIDIA: límite de potencia por defecto muy distinto al de referencia (BIOS de otro
+         modelo, ej. una 3080 común con BIOS de 450 W);
+       * driver de video sin firmar o con el archivo modificado, Windows en modo de prueba
+         de firmas (testsigning) y error 43: lo que se usa para hacer andar BIOS
+         modificados en AMD (minería) o para disfrazar placas truchas;
+       * rendimiento del stress y ancho de banda de la VRAM vs placas con el mismo chip
+         del historial (avisa si rinde menos de 75%, con 2 o más placas para comparar).
+     Límites: en NVIDIA solo se pueden grabar BIOS firmados por NVIDIA, así que "BIOS
+     modificado" ahí es siempre un BIOS oficial de otra placa (lo que sí se detecta). Un
+     BIOS de AMD con timings de memoria cambiados no se puede leer desde Windows sin
+     herramientas especiales: se detecta de forma indirecta (driver parcheado, error 43,
+     rendimiento bajo vs placas iguales). Para la última palabra: GPU-Z (pestaña
+     "Graphics Card", botón de lupa = verificación online) y mirar la placa.
+   - Memoria de video con memtest_vulkan (~5 min): prueba primero la placa dedicada.
+     Escribe y verifica toda la memoria al 100%, que es lo que encuentra chips fallados.
+     Corte de seguridad: si la memoria pasa 100 °C (sostenido), corta antes y lo anota
+     como información, sin errores (GDDR6X recién baja velocidad a ~110 °C).
+   - Stress con verificación: abre Edge/Chrome a pantalla completa con una carga tipo
+     FurMark: capas de "pelo" con texturas, iluminación y transparencias, que reparte el
+     calor por el chip como un juego exigente (no solo los núcleos de cálculo). Se ajusta
+     sola hasta llevar la GPU al 100%. Cada 3 s dibuja un cuadro fijo y lo
+     compara: si sale distinto, la GPU calculó mal (artefactos). Esc = terminar antes.
+   - En la misma pantalla del stress muestra en vivo: temperatura del núcleo, hotspot,
+     diferencia entre ambos, memoria de video, CPU, consumo y carga, con el máximo de cada
+     una y un gráfico. Verde = normal, amarillo = cerca del límite, rojo = sale como
+     observación en el informe. Límites: núcleo 88 °C, hotspot 105 °C, diferencia 28 °C,
+     memoria 104 °C. Necesita LibreHardwareMonitor en tools (no hace falta PawnIO para la GPU).
+   - También vigila reinicios del driver de video y el enlace PCIe bajo carga.
+   El monitor tiene que estar conectado a la placa de video (si no, el navegador usa la iGPU).
+F  Fuente: CPU (todos los hilos, con verificación) y GPU (el mismo stress de video) al 100%
+   al mismo tiempo, 10 min. Es el máximo consumo del equipo, como un juego pesado.
+   - Si la PC se apaga o se reinicia, al volver a abrir el programa queda anotado como
+     FALLA de la fuente (no sostiene el consumo, o protección por temperatura).
+   - También marca errores de cálculo, reinicios del driver de video, WHEA y +12 V por
+     debajo de 11,4 V (según el sensor de la mother; confirmar con tester).
+   - Mide el consumo CPU + GPU (el resto del equipo suma ~40-80 W más).
+   Conviene después de los pasos 3 y 5: si por separado anduvieron bien y juntos falla,
+   es la fuente (o el VRM de la mother). El informe trae la tarjeta "Fuente de alimentación".
+R  RAM con TestMem5, automático:
+   - Se baja solo (TestMem5 0.13, que trae las configs de anta777 y 1usmus). Si en
+     tools\TestMem5 había una 0.12 copiada a mano, se guarda como tools\TestMem5-0.12.
+   - Config automática: anta777 DDR5 para Ryzen o para Intel, o anta777 Extreme en DDR4.
+     Se puede elegir otra en el paso 6.
+   - El tiempo es el mínimo: cuando se cumple, TestMem5 termina la vuelta que está haciendo.
+   - El resultado se lee de su Log.txt: errores (se frena en el primero), si terminó bien,
+     cuánta RAM probó y si no pudo usar AWE. No pregunta nada.
+8  Protocolo completo: 1 + 4 + 2 + 3 + eventos durante la prueba (+ video, fuente y 6 opcionales).
+H  Herramientas: descargar, actualizar o abrir.
+9  Resumen y salir.
+
+TIEMPOS ORIENTATIVOS (opción 8, CPU de 16 hilos)
+Chequeo 1 min + autotest SMART 2-3 min + all-core 15 min + por núcleo 45 s x 16 = ~12 min.
+Total ~30 min, +16 min si se incluye video (VRAM 5 + stress 10). Para descartar un Intel 13ª/14ª gen degradado: por núcleo a 180 s.
+
+CÓMO LEER EL RESULTADO
+- Errores de cálculo, WHEA 18/19 durante el stress, o cuelgue/reinicio = FALLA.
+  Con todo en stock eso es el CPU (o la placa/VRM si también falla con otro CPU).
+- Un solo núcleo que falla en el test por núcleo = núcleo degradado o débil.
+- Si un núcleo rinde menos que sus pares, se repite solo al final: si al repetir da normal,
+  fue otro programa usando ese núcleo (queda como información); si se repite, observación.
+- Un núcleo que rinde menos de 85% que sus pares (it/s) = no sostiene el boost: repetirlo;
+  si se repite, temperatura, curve optimizer o degradación.
+- Núcleos/hilos que no coinciden con la ficha del modelo = núcleos o CCD deshabilitados.
+- GPU a x8/x4 en el slot principal = slot sucio, pin dañado o líneas compartidas con un M.2.
+  Excepción: con Ryzen 8000G el slot de video va a x8 o x4 por el CPU (es normal).
+- NVMe: errores de medio, critical warning o spare bajo el umbral = no apto.
+- GPU: errores en VRAM o en la verificación del stress, o reinicio del driver = FALLA.
+  Nombre que no coincide con el chip, driver sin firmar/modificado o potencia muy fuera
+  de la referencia = observación: no comprar/vender como original sin revisarla a mano.
+  Diferencia núcleo/hotspot (en el stress, que es tipo FurMark): sin placas iguales en el
+  historial, 22-27 °C = información y 28 °C o más = observación (pasta seca o disipador mal
+  apoyado). Con 2 o más placas del mismo chip en el historial se compara contra ellas:
+  8 °C más que la mediana = observación.
+  En el test de VRAM no se evalúa (el núcleo casi no trabaja y el hotspot sube por el
+  controlador de memoria).
+  Memoria de video a 100 °C o más = revisar thermal pads.
+
+COMPLEMENTOS
+- Prime95 (Small FFTs, 30-60 min): máximo calor y AVX. Busca "FATAL ERROR" o
+  "Hardware failure" en pantalla/results.txt.
+- y-cruncher (Stress test): muy bueno para encontrar inestabilidad con varias cargas.
+- CoreCycler: test por núcleo con Prime95/y-cruncher, ideal para Ryzen y para cazar
+  núcleos flojos con más presión que el test integrado.
+- Intel Processor Diagnostic Tool: test oficial de Intel, útil en 13ª/14ª gen.
+- TestMem5 (1usmus_v3 / anta777 extreme) para RAM. MemTest86 desde USB también sirve
+  en DDR5 si es una versión reciente.
