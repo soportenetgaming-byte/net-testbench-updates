@@ -1,5 +1,5 @@
 ﻿<#
-    NET Gaming - Banco de pruebas de hardware usado  (v2.9.1)
+    NET Gaming - Banco de pruebas de hardware usado  (v2.9.2)
     -------------------------------------------------------
     CPU, motherboard, RAM (inventario/slots) y discos (SMART, lectura, escritura+verificación).
     Correr como administrador (usar Iniciar-TestBench.bat).
@@ -21,7 +21,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$Version = '2.9.1'
+$Version = '2.9.2'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $IsWin = [Environment]::OSVersion.Platform -eq 'Win32NT'
 
@@ -72,7 +72,8 @@ function Invoke-AutoActualizacion {
             if ($n -notmatch '^[\w\-. ]+(/[\w\-. ]+)?$' -or $n -match '\.\.') { throw ("nombre de archivo no permitido: {0}" -f $n) }
             $url = $UpdateBase + ((($n -split '/') | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/')
             $dest = Join-Path $tmp ($n -replace '/', '__')
-            Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
+            # ?t= para que GitHub no entregue una copia en caché de la versión anterior (daría "no coincide")
+            Invoke-WebRequest -Uri ($url + '?t=' + [DateTime]::UtcNow.Ticks) -OutFile $dest -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
             if ((Get-FileHash -Path $dest -Algorithm SHA256).Hash -ne ([string]$a.sha256).ToUpper()) { throw ("{0} no coincide con lo publicado (descarga incompleta)" -f $n) }
         }
         $nuevo = Join-Path $tmp 'NET-TestBench.ps1'
@@ -823,6 +824,14 @@ namespace NetBench
         void Handle(System.Net.HttpListenerContext ctx)
         {
             string path = ctx.Request.Url.AbsolutePath;
+            // Solo la propia interfaz puede mandar órdenes: se rechaza lo que venga de otra página abierta en el navegador
+            string origin = ctx.Request.Headers["Origin"];
+            if (!string.IsNullOrEmpty(origin) && origin != "http://127.0.0.1:" + Port)
+            {
+                ctx.Response.StatusCode = 403;
+                Reply(ctx, "", "text/plain");
+                return;
+            }
             string body = "";
             if (ctx.Request.HasEntityBody)
                 using (StreamReader r = new StreamReader(ctx.Request.InputStream, System.Text.Encoding.UTF8)) body = r.ReadToEnd();
@@ -1290,6 +1299,9 @@ function Section([string]$Title) {
     Log ("  $Title") 'Cyan'
     Log ('=' * 78) 'Cyan'
 }
+
+# GeForce RTX 5050-5090 (no las RTX 5000 Ada ni las Quadro RTX 5000, que son de otra generación)
+function Test-Rtx50([string]$Nombre) { return [bool]($Nombre -match 'RTX\s*50[5-9]0') }
 
 function Set-Verdict {
     param([string]$Area, [string]$Estado, [string]$Detalle)
@@ -2259,7 +2271,11 @@ function Invoke-TestMem5([int]$Minutes = 30, [string]$Config = 'auto') {
         }
         Write-Progress -Activity ("TestMem5 ({0})" -f $Config) -Status ("{0:hh\:mm\:ss} de {1} min mínimo | errores {2} | WHEA {3}{4}{5} | Q = dejar de vigilar" -f $el, $Minutes, $errores.Count, $whea, $(if ($cobertura) { ' | ' + $cobertura }), $sTxt) -PercentComplete ([math]::Min(99, 100 * $el.TotalMinutes / $Minutes))
         if ($fin -or $errores.Count) { if ($errores.Count) { Start-Sleep -Seconds 2 }; break }
-        if ($p.HasExited) { if (-not $fin) { $fin = 'cerrado' }; break }
+        if ($p.HasExited) {
+            # si TestMem5 se relanzó solo (el proceso que abrimos termina y queda otro TM5), se sigue vigilando ese
+            $otro = @(Get-Process -Name 'TM5' -ErrorAction SilentlyContinue | Where-Object { -not $_.HasExited }) | Select-Object -First 1
+            if ($otro) { $p = $otro } else { if (-not $fin) { $fin = 'cerrado' }; break }
+        }
         if ($el.TotalMinutes -gt $limite) { $fin = 'tiempo'; break }
     }
     Write-Progress -Activity 'TestMem5' -Completed
@@ -2273,6 +2289,7 @@ function Invoke-TestMem5([int]$Minutes = 30, [string]$Config = 'auto') {
     $Global:M.Ram['Tm5Min'] = [math]::Round($dur, 1)
     $Global:M.Ram['Tm5Cobertura'] = $cobertura
     $res = 'OK'
+    $cfgNombre = if ($Tm5Configs[$Config]) { [string]$Tm5Configs[$Config] } else { $Config -replace '\.cfg$', '' }
     if ($errores.Count -or $crashNuevo) {
         $res = 'FALLA'
         $Global:M.Ram['Tm5Res'] = 'con errores'
@@ -2281,7 +2298,7 @@ function Invoke-TestMem5([int]$Minutes = 30, [string]$Config = 'auto') {
         if (-not $p.HasExited) { Log '  TestMem5 queda abierto para que veas el error.' 'Yellow' }
     } elseif ($fin -eq 'completo') {
         $Global:M.Ram['Tm5Res'] = 'sin errores'
-        Set-Verdict 'RAM' 'OK' ("TestMem5 ({0}) {1:N0} min sin errores{2}." -f $Tm5Configs[$Config], $dur, $(if ($cobertura) { ", probó el $cobertura" }))
+        Set-Verdict 'RAM' 'OK' ("TestMem5 ({0}) {1:N0} min sin errores{2}." -f $cfgNombre, $dur, $(if ($cobertura) { ", probó el $cobertura" }))
         try { if (-not $p.HasExited) { $p.CloseMainWindow() | Out-Null; Start-Sleep -Seconds 2; if (-not $p.HasExited) { $p.Kill() } } } catch {}
     } elseif ($w.Count) {
         $res = 'FALLA'
@@ -2303,7 +2320,7 @@ function Invoke-TestMem5([int]$Minutes = 30, [string]$Config = 'auto') {
     }
     if ($awe) { Set-Verdict 'RAM' 'INFO' 'TestMem5 no pudo usar AWE (memoria bloqueada): probó menos RAM de la habitual. Suele resolverse cerrando sesión y volviendo a entrar, o reiniciando, después del primer uso.' }
     if ($res -ne 'Cancelada') { foreach ($pe in @($Global:Pendientes | Where-Object { $_ -match '^RAM: TestMem5' })) { [void]$Global:Pendientes.Remove($pe) } }
-    Add-Prueba 'Memoria RAM (TestMem5)' $dur $res ("{0}{1}" -f $Tm5Configs[$Config], $(if ($cobertura) { ' · ' + $cobertura }))
+    Add-Prueba 'Memoria RAM (TestMem5)' $dur $res ("{0}{1}" -f $cfgNombre, $(if ($cobertura) { ' · ' + $cobertura }))
 }
 
 function Watch-Externo([int]$Sel = 0) {
@@ -3037,7 +3054,7 @@ function Read-Sensors {
                         if ($raw) {
                             $nv = [int][NetBench.NvThermal]::ValidCount($ix)
                             for ($k = 0; $k -lt [math]::Min($nv, 32); $k++) { Update-GpuTempDump ('{0} · NVAPI[{1}]' -f $hw, $k) $raw[$k] }
-                            if ([string]$h.Name -notmatch 'RTX 50' -and $nv -ge 2 -and $raw[1] -gt 0 -and $raw[1] -lt 150) {
+                            if (-not (Test-Rtx50 $h.Name) -and $nv -ge 2 -and $raw[1] -gt 0 -and $raw[1] -lt 150) {
                                 if ($null -ne $hot -and [math]::Abs($hot - $raw[1]) -ge 3) { $Global:NvHotCorregido = $true }
                                 $hot = [double]$raw[1]
                             }
@@ -3175,12 +3192,15 @@ function Test-Drivers {
 # ======================================================================
 #  Historial (CSV compartido en Reportes) y comparación con equipos iguales
 # ======================================================================
+# Acepta coma o punto decimal: el historial se comparte entre PCs con Windows en distintos idiomas
 function ConvertTo-Num($s) {
-    if ($null -eq $s -or [string]$s -eq '') { return $null }
+    if ($null -eq $s) { return $null }
+    $t = ([string]$s).Trim()
+    if ($t -eq '') { return $null }
+    if ($t -match '^-?\d{1,3}(\.\d{3})+,\d+$') { $t = $t -replace '\.', '' }   # 1.234,5
+    $t = $t -replace ',', '.'
     $d = 0.0
-    foreach ($ci in @([Globalization.CultureInfo]::CurrentCulture, [Globalization.CultureInfo]::InvariantCulture)) {
-        if ([double]::TryParse([string]$s, [Globalization.NumberStyles]::Float, $ci, [ref]$d)) { return $d }
-    }
+    if ([double]::TryParse($t, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$d)) { return $d }
     return $null
 }
 
@@ -3236,7 +3256,9 @@ function Save-Historial {
     $e = $Global:M.Equipo; $c = $Global:M.Cpu; $s = $Global:SesionSensores
     $st = @{}
     foreach ($k in $Global:Verdicts.Keys) { $st[$k] = $Global:Verdicts[$k].Estado }
-    $fmt = { param($v, $d) if ($null -eq $v) { '' } else { ([double]$v).ToString("F$d", [Globalization.CultureInfo]::CurrentCulture) } }
+    # siempre con coma decimal (como Excel en español), sea cual sea el idioma del Windows que se está testeando
+    $esAr = [Globalization.CultureInfo]::GetCultureInfo('es-AR')
+    $fmt = { param($v, $d) if ($null -eq $v) { '' } else { ([double]$v).ToString("F$d", $esAr) } }
     $row = [pscustomobject][ordered]@{
         Sesion       = $Global:M.Sesion
         Fecha        = (Get-Date -Format 'yyyy-MM-dd HH:mm')
@@ -3278,6 +3300,12 @@ function Save-Historial {
         RAM_Estado   = $st['RAM']
         Discos_Estado = $st['Discos']
         GPU_Estado   = $st['GPU']
+        Fuente_Estado = $st['Fuente']
+        Sistema_Estado = $st['Plataforma']
+        FuenteW      = $Global:M.Fuente['TotalMax']
+        Fuente12V    = (& $fmt $Global:M.Fuente['V12Min'] 2)
+        TestMem5     = $Global:M.Ram['Tm5Res']
+        TestMem5Min  = (& $fmt $Global:M.Ram['Tm5Min'] 0)
         Reporte      = $(if ($Global:ReportFile) { Split-Path -Leaf $Global:ReportFile } else { '' })
     }
     try {
@@ -3622,7 +3650,7 @@ footer { margin-top:26px; padding:16px 32px 22px; border-top:1px solid var(--lin
                     [void]$kv.Add(@('Stress con verificación', ('{0:N0} min, {1}' -f $g.StressMin, $(if ($g.StressErr) { "$($g.StressErr) errores" } else { 'sin errores' }))))
                 }
                 if ($null -ne $g.GpuTempMax) { [void]$kv.Add(@('Temperatura del núcleo', ('{0} °C <span class="sub">(la que muestran FurMark y GPU-Z)</span>' -f $g.GpuTempMax))) }
-                if ($null -ne $g.GpuHotMax -and [string]$modelo -notmatch 'RTX 50') {   # en RTX 50 no hay lectura oficial
+                if ($null -ne $g.GpuHotMax -and -not (Test-Rtx50 $modelo)) {   # en RTX 50 no hay lectura oficial
                     $dl = if ($null -ne $g.GpuDeltaMax) { ' <span class="sub">({0} °C sobre el núcleo)</span>' -f $g.GpuDeltaMax } else { '' }
                     [void]$kv.Add(@('Punto más caliente (hotspot)', ('{0} °C{1}' -f $g.GpuHotMax, $dl)))
                 }
@@ -4119,7 +4147,7 @@ function Show-GpuSensorStats($St, [string]$Contexto) {
     }
     # RTX 50: NVIDIA no publica el hotspot. Lo que haya sale de una lectura no oficial (LibreHardwareMonitor
     # con PawnIO) que puede marcar de más: se anota en el reporte técnico pero no genera aviso.
-    $rtx50 = ([string]$St.GpuName -match 'RTX 50')
+    $rtx50 = Test-Rtx50 $St.GpuName
     if ($rtx50 -and $null -ne $St.GpuDeltaMax) {
         Log ("  RTX 50: el hotspot ({0:N0} °C, diferencia {1:N0} °C) es una lectura no oficial; no se evalúa. Para revisar la pasta, comparar con HWiNFO/GPU-Z actualizados." -f $St.GpuHotMax, $St.GpuDeltaMax) 'DarkGray'
     }
@@ -4300,7 +4328,7 @@ function Invoke-GpuStress([int]$Minutes) {
     $t0 = Get-Date
     $bp = $null
     try { $bp = Start-Process -FilePath $browser -ArgumentList $bargs -PassThru } catch { Log ("  No se pudo abrir el navegador: {0}" -f $_.Exception.Message) 'Yellow' }
-    $links = $null; $resets = @(); $lastPoll = [datetime]::MinValue; $st = $null; $stopped = $false
+    $links = $null; $resets = @(); $lastPoll = [datetime]::MinValue; $st = $null; $stopped = $false; $corte = ''
     $lastSens = [datetime]::MinValue
     $serie = New-Object System.Collections.ArrayList
     if (-not $Global:Lhm) { $srv.Sensors = (ConvertTo-Json -Compress -InputObject ([ordered]@{ ok = $false; motivo = 'Sin sensores: falta LibreHardwareMonitor (Herramientas).' })) }
@@ -4325,11 +4353,12 @@ function Invoke-GpuStress([int]$Minutes) {
             if ($r.Count -gt $resets.Count) { $resets = $r; Write-Host ("  !! El driver de video se reinició ({0})" -f $r.Count) -ForegroundColor Red }
             if (-not $links -and $st -and $st.elapsed -ge 40) { $links = @(Get-GpuLinks) }
         }
-        if (-not $srv.PageLoaded -and $el -gt 60) { Log '  El navegador no cargó la página de prueba.' 'Yellow'; break }
+        if (-not $srv.PageLoaded -and $el -gt 60) { $corte = 'el navegador no cargó la página de prueba'; Log '  El navegador no cargó la página de prueba.' 'Yellow'; break }
         if ($srv.PageLoaded -and $srv.LastUpdate -ne [datetime]::MinValue -and ((Get-Date) - $srv.LastUpdate).TotalSeconds -gt 45) {
+            $corte = 'la ventana de la prueba dejó de responder (navegador cerrado o minimizado, o GPU colgada)'
             Log '  La página dejó de responder más de 45 s (GPU colgada o navegador cerrado).' 'Yellow'; break
         }
-        if ($el -gt $limit) { break }
+        if ($el -gt $limit) { $corte = 'no terminó en el tiempo previsto'; break }
         $txt = if ($st) { "{0}/{1} s | {2} cuadros/s | {3} pasadas | verificaciones {4} | errores {5}" -f $st.elapsed, $st.duration, $st.fps, $st.passes, $st.checks, $st.errors } else { 'esperando al navegador...' }
         if ($stats.GpuName -and $null -ne $stats.GpuTempMax) { $txt += (" | GPU máx {0:N0} °C" -f $stats.GpuTempMax) }
         Write-Progress -Activity 'Stress de GPU (mirá la ventana del navegador)' -Status ($txt + ' | Q = cortar') -PercentComplete ([math]::Min(100, 100 * $el / ($Minutes * 60)))
@@ -4338,6 +4367,8 @@ function Invoke-GpuStress([int]$Minutes) {
     Write-Progress -Activity 'Stress de GPU' -Completed
     if ($srv.FinalStatus) { try { $st = $srv.FinalStatus | ConvertFrom-Json } catch {} }
     Start-Sleep -Seconds 2
+    if ($srv.FinalStatus) { try { $st = $srv.FinalStatus | ConvertFrom-Json } catch {} }
+    $completo = [bool]$srv.Done      # la página llegó al final (o se cortó con Esc): el resultado es el definitivo
     $srv.Stop()
     if ($bp) { try { Start-Process -FilePath 'taskkill.exe' -ArgumentList '/T', '/F', '/PID', $bp.Id -WindowStyle Hidden -Wait } catch {} }
     Clear-Marker
@@ -4350,7 +4381,9 @@ function Invoke-GpuStress([int]$Minutes) {
     foreach ($e in ($resets | Select-Object -First 5)) { Log ('    ' + $e.ProviderName + ' ' + (Get-EventLine $e)) 'Red' }
     $res = 'OK'
     $hayDedicada = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $DedicadaRegex }).Count -gt 0
-    if (-not $st) {
+    if (-not $st -and $stopped) {
+        $res = 'Cancelada'
+    } elseif (-not $st) {
         $res = 'Con observaciones'
         Set-Verdict 'GPU' 'ATENCION' 'El stress de GPU no devolvió resultados (el navegador no arrancó o se cerró).'
     } else {
@@ -4365,7 +4398,12 @@ function Invoke-GpuStress([int]$Minutes) {
             Set-Verdict 'GPU' 'FALLA' ("La GPU calculó mal en {0} de {1} verificaciones (artefactos). Típico de VRAM o núcleo inestables, overclock de fábrica agresivo o temperatura." -f $st.errors, $st.checks)
         }
         if ($st.lost) { $res = 'FALLA'; Set-Verdict 'GPU' 'FALLA' 'La GPU dejó de responder durante el stress y el driver se reinició.' }
-        if ($st.aborted -and $res -eq 'OK') { $res = 'Cancelada' }
+        if (($st.aborted -or $stopped) -and $res -eq 'OK') { $res = 'Cancelada' }
+        elseif (-not $completo -and $res -eq 'OK') {
+            # antes esto salía como "OK": una prueba que no terminó no es una prueba aprobada
+            $res = 'Con observaciones'
+            Set-Verdict 'GPU' 'ATENCION' ("El stress de GPU no llegó a terminar: {0} a los {1:N0} s de {2:N0}. Repetirlo sin tocar la PC; si vuelve a pasar, la placa se cuelga bajo carga." -f $(if ($corte) { $corte } else { 'se interrumpió' }), $st.elapsed, $st.duration)
+        }
     }
     if ($resets.Count) {
         $res = 'FALLA'
@@ -4397,7 +4435,7 @@ function Invoke-GpuStress([int]$Minutes) {
     $Global:M.Gpu['StressErr'] = $(if ($st) { [int]$st.errors } else { $null })
     $Global:M.Gpu['StressChecks'] = $(if ($st) { [int]$st.checks } else { $null })
     $Global:M.Gpu['Renderer'] = $(if ($st) { $st.renderer } else { '' })
-    if ($st -and $st.score -and -not $st.aborted -and -not $st.error -and $st.renderer -notmatch 'SwiftShader|llvmpipe|Basic Render') {
+    if ($st -and $completo -and -not $stopped -and $st.score -and -not $st.aborted -and -not $st.error -and $st.renderer -notmatch 'SwiftShader|llvmpipe|Basic Render') {
         $Global:M.Gpu['Score'] = [int]$st.score
         Log ("  Puntaje del stress: {0:N0} (trabajo por segundo, independiente de la resolución)" -f $st.score)
         $cmp = Show-ComparacionGpu 'GpuPuntaje' ([double]$st.score) 'Rendimiento de la GPU'
@@ -4441,7 +4479,7 @@ function Invoke-PruebaFuente([int]$Minutes = 10) {
         '--disable-backgrounding-occluded-windows', $url)
     $bp = $null
     try { $bp = Start-Process -FilePath $browser -ArgumentList $bargs -PassThru } catch { Log ("  No se pudo abrir el navegador: {0}" -f $_.Exception.Message) 'Yellow' }
-    $cpuArrancado = $false; $st = $null; $stopped = $false; $resets = @(); $whea = 0
+    $cpuArrancado = $false; $st = $null; $stopped = $false; $corte = ''; $resets = @(); $whea = 0
     $lastSens = [datetime]::MinValue; $lastPoll = [datetime]::MinValue
     $limit = $Minutes * 60 + 120
     while (-not $srv.Done) {
@@ -4463,11 +4501,12 @@ function Invoke-PruebaFuente([int]$Minutes = 10) {
             $w = @(Get-WheaSince $t0)
             if ($w.Count -gt $whea) { $whea = $w.Count; Write-Host ("  !! WHEA durante la prueba ({0})" -f $whea) -ForegroundColor Red }
         }
-        if (-not $srv.PageLoaded -and $el -gt 60) { Log '  El navegador no cargó la página de prueba.' 'Yellow'; break }
+        if (-not $srv.PageLoaded -and $el -gt 60) { $corte = 'el navegador no cargó la página de prueba'; Log '  El navegador no cargó la página de prueba.' 'Yellow'; break }
         if ($srv.PageLoaded -and $srv.LastUpdate -ne [datetime]::MinValue -and ((Get-Date) - $srv.LastUpdate).TotalSeconds -gt 45) {
+            $corte = 'la ventana de la prueba dejó de responder (navegador cerrado o minimizado, o GPU colgada)'
             Log '  La página dejó de responder más de 45 s (GPU colgada o navegador cerrado).' 'Yellow'; break
         }
-        if ($el -gt $limit) { break }
+        if ($el -gt $limit) { $corte = 'no terminó en el tiempo previsto'; break }
         $tot = if ($null -ne $stats.TotalMax) { (' | consumo CPU+GPU máx {0:N0} W' -f $stats.TotalMax) } else { '' }
         $txt = if ($st) { "{0}/{1} s | GPU: {2} cuadros/s, errores {3} | CPU: errores {4}{5}" -f $st.elapsed, $st.duration, $st.fps, $st.errors, $run.TotalErrors, $tot } else { 'esperando al navegador...' }
         Write-Progress -Activity 'Prueba de fuente: CPU + GPU al 100%' -Status ($txt + ' | Q = cortar') -PercentComplete ([math]::Min(100, 100 * $el / ($Minutes * 60)))
@@ -4479,6 +4518,9 @@ function Invoke-PruebaFuente([int]$Minutes = 10) {
     while ($run.Running -and ((Get-Date) - $w0).TotalSeconds -lt 15) { Start-Sleep -Milliseconds 200 }
     if ($srv.FinalStatus) { try { $st = $srv.FinalStatus | ConvertFrom-Json } catch {} }
     Start-Sleep -Seconds 1
+    if ($srv.FinalStatus) { try { $st = $srv.FinalStatus | ConvertFrom-Json } catch {} }
+    $completo = [bool]$srv.Done
+    $cortada = $stopped -or ($st -and $st.aborted)
     $srv.Stop()
     if ($bp) { try { Start-Process -FilePath 'taskkill.exe' -ArgumentList '/T', '/F', '/PID', $bp.Id -WindowStyle Hidden -Wait } catch {} }
     Clear-Marker
@@ -4511,14 +4553,17 @@ function Invoke-PruebaFuente([int]$Minutes = 10) {
         if ($res -eq 'OK') { $res = 'Con observaciones' }
         Set-Verdict 'Fuente' 'ATENCION' ("Los +12 V bajaron a {0:N2} V con el equipo al máximo (lo mínimo aceptable es 11,4 V). Medir con tester: puede ser la fuente o el sensor de la mother." -f $f.V12Min)
     }
-    if (-not $st -or $st.error) {
+    if ($st -and $st.error -or (-not $st -and -not $stopped)) {
         if ($res -eq 'OK') { $res = 'Con observaciones' }
         Set-Verdict 'Fuente' 'ATENCION' 'La parte de GPU de la prueba de fuente no corrió bien (ver el stress de GPU).'
-    } elseif ($st.renderer -match 'SwiftShader|llvmpipe|Basic Render|Microsoft Basic') {
+    } elseif ($st -and $st.renderer -match 'SwiftShader|llvmpipe|Basic Render|Microsoft Basic') {
         if ($res -eq 'OK') { $res = 'Con observaciones' }
         Set-Verdict 'Fuente' 'ATENCION' 'El navegador dibujó por software: la GPU no se cargó y la prueba de fuente no es válida (falta el driver de video).'
+    } elseif (-not $completo -and -not $cortada) {
+        if ($res -eq 'OK') { $res = 'Con observaciones' }
+        Set-Verdict 'Fuente' 'ATENCION' ("La prueba de fuente no llegó a terminar: {0} a los {1:N0} s de {2:N0}. Repetirla sin tocar la PC; si vuelve a pasar, el equipo se cuelga con CPU y GPU al máximo." -f $(if ($corte) { $corte } else { 'se interrumpió' }), $st.elapsed, $st.duration)
     }
-    if ($stopped -and $res -eq 'OK') { $res = 'Cancelada'; Set-Verdict 'Fuente' 'INFO' ("Prueba de fuente cortada a los {0:N0} min sin problemas hasta ese momento." -f $min) }
+    if ($cortada -and $res -eq 'OK') { $res = 'Cancelada'; Set-Verdict 'Fuente' 'INFO' ("Prueba de fuente cortada a los {0:N0} min sin problemas hasta ese momento." -f $min) }
     if ($res -eq 'OK') {
         Set-Verdict 'Fuente' 'OK' ("{0:N0} min con CPU y GPU al 100% juntos, sin apagones, reinicios ni errores{1}." -f $min, $(if ($null -ne $f.TotalMax) { (" (CPU+GPU {0:N0} W)" -f $f.TotalMax) } else { '' }))
     }
@@ -5072,12 +5117,13 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
   function showHelp() {
     $("helpDlg").innerHTML = "<h3>Atajos de teclado</h3><div class=\"keys\">" +
       "<span><kbd>1</kbd> – <kbd>9</kbd></span><span>Correr ese paso</span>" +
+      "<kbd>D</kbd><span>Drivers: buscar e instalar</span><kbd>F</kbd><span>Prueba de fuente (CPU + GPU juntos)</span>" +
       "<kbd>P</kbd><span>Correr el protocolo completo</span><kbd>Esc</kbd><span>Cortar la prueba en curso / cerrar ventanas</span>" +
       "<kbd>I</kbd><span>Generar y abrir el informe para el cliente</span><kbd>N</kbd><span>Terminar este equipo y empezar otro</span>" +
       "<kbd>H</kbd><span>Herramientas</span><kbd>?</kbd><span>Esta ayuda</span></div>" +
       "<h3>Orden recomendado</h3><ol style=\"margin:0;padding-left:20px;color:#d1d5db\"><li>Chequeo general: si marca drivers faltantes, instalalos antes de seguir.</li>" +
       "<li>Discos: SMART + autotest.</li><li>CPU todos los núcleos (calor y estabilidad).</li><li>CPU núcleo por núcleo (boost máximo).</li>" +
-      "<li>Video, si tiene placa dedicada.</li><li>RAM con TestMem5 (con XMP/EXPO activado).</li><li>Informe para el cliente.</li></ol>" +
+      "<li>Video, si tiene placa dedicada.</li><li>Fuente: CPU + GPU juntos, después de que cada uno pasó por separado.</li><li>RAM con TestMem5 (con XMP/EXPO activado).</li><li>Informe para el cliente.</li></ol>" +
       '<p class="hint" style="margin:0">Si la PC se cuelga o reinicia en medio de una prueba, eso cuenta como falla: al volver a abrir el programa te dice en qué prueba (y en qué núcleo) pasó.</p>' +
       '<div class="btns"><button class="btn" id="hClose">Cerrar <kbd>Esc</kbd></button></div>';
     $("helpModal").classList.add("show");

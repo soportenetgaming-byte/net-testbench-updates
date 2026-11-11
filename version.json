@@ -1,17 +1,21 @@
 {
-  "version": "2.9.1",
+  "version": "2.9.2",
   "fecha": "2026-11-11",
   "cambios": [
-    "Orden: el NG- ya viene puesto, solo se escriben los números"
+    "Stress de GPU y prueba de fuente: si la ventana se cierra, se cuelga o se corta, ya no sale como \"OK\"",
+    "Historial: los números se leen bien aunque el Windows de la PC esté en otro idioma; suma columnas de fuente y TestMem5",
+    "TestMem5: sigue vigilando si el programa se reinicia solo",
+    "Actualización: la descarga ya no puede traer una copia vieja en caché",
+    "Hotspot: las RTX 5000 de workstation ya no se confunden con la serie RTX 50"
   ],
   "archivos": [
     {
       "nombre": "NET-TestBench.ps1",
-      "sha256": "945B19843B7F9D9168DCD15BFCF68716805846FA9173C928C7B6DB5FF5E9F313"
+      "sha256": "D090AED13A2FE429D56424B444D780BF10DC1D15BEE43A63AC5FA44890944216"
     },
     {
       "nombre": "LEEME.txt",
-      "sha256": "C6C066A61604A4FB2BC39CE1F5D0E503099A63E55908F3F514727D88915DC0F3"
+      "sha256": "ED24CCB42139E609CD55266CACE3D80BB84A4C5F9B8C16E174626F2C0BB4A547"
     }
   ]
 }
