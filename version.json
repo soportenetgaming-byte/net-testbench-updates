@@ -1,20 +1,17 @@
 {
-  "version": "2.9",
-  "fecha": "2026-10-31",
+  "version": "2.9.1",
+  "fecha": "2026-11-11",
   "cambios": [
-    "Actualización automática: al abrirse baja la versión nueva y arranca con esa",
-    "Prueba de fuente: CPU y GPU al 100% juntos (paso F)",
-    "TestMem5 automático: se baja solo, elige la config y lee el resultado (paso 6)",
-    "Historial compartido entre bancos a través del NET-Receptor de la PC de soporte (receptor 1.2)"
+    "Orden: el NG- ya viene puesto, solo se escriben los números"
   ],
   "archivos": [
     {
       "nombre": "NET-TestBench.ps1",
-      "sha256": "184B85E09523D7C4E682243AA4AAFCE5CE45A480A6D647CFC7066C3FF2E53C4E"
+      "sha256": "945B19843B7F9D9168DCD15BFCF68716805846FA9173C928C7B6DB5FF5E9F313"
     },
     {
       "nombre": "LEEME.txt",
-      "sha256": "890380DE12B97AC251E0CA9D06AF58262980FE5284564B7B96DCD2A402F3C9A1"
+      "sha256": "C6C066A61604A4FB2BC39CE1F5D0E503099A63E55908F3F514727D88915DC0F3"
     }
   ]
 }

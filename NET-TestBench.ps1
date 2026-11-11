@@ -1,5 +1,5 @@
 ﻿<#
-    NET Gaming - Banco de pruebas de hardware usado  (v2.9)
+    NET Gaming - Banco de pruebas de hardware usado  (v2.9.1)
     -------------------------------------------------------
     CPU, motherboard, RAM (inventario/slots) y discos (SMART, lectura, escritura+verificación).
     Correr como administrador (usar Iniciar-TestBench.bat).
@@ -21,7 +21,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$Version = '2.9'
+$Version = '2.9.1'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $IsWin = [Environment]::OSVersion.Platform -eq 'Win32NT'
 
@@ -4680,6 +4680,11 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
 .field { display:grid; gap:6px; }
 .field label { font-size:12.5px; color:var(--muted); }
 .field input, .field select { padding:9px 11px; font-size:15px; }
+.pref { display:flex; align-items:stretch; }
+.pref span { display:grid; place-items:center; padding:0 12px; border:1px solid var(--line); border-right:0; border-radius:8px 0 0 8px; background:#1d1d25; color:var(--naranja); font-weight:800; font-size:16px; letter-spacing:.02em; transition:opacity .15s; }
+.pref span.sinpre { opacity:.3; text-decoration:line-through; }
+.pref input { flex:1; border-radius:0 8px 8px 0; font-size:18px; font-weight:700; letter-spacing:.04em; }
+.field .hint { font-size:12px; color:var(--muted); }
 .check { display:grid; gap:6px; font-size:13px; color:#d1d5db; margin:0; padding-left:18px; }
 
 /* Ventanas */
@@ -4829,7 +4834,10 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
       "<h1>Nuevo equipo</h1><p>Cargá la orden y tocá Empezar. Después seguí los pasos en orden: cada uno explica qué hace y cuánto tarda.</p>" +
       (S.previa ? '<div class="banner fail">La sesión anterior se cortó durante: <b>' + esc(S.previa) + "</b>. Si la PC se colgó o reinició sola, eso es una falla de esa prueba.</div>" : "") +
       (faltan.length ? '<div class="banner warn">Faltan herramientas: ' + esc(faltan.map(function (t) { return t.nombre; }).join(", ")) + '. <button class="act" id="sDl">Descargar</button></div>' : "") +
-      '<div class="field"><label>Orden o etiqueta del equipo</label><input id="fOrden" type="text" placeholder="Ej: NG-23100" autofocus></div>' +
+      (S.prefijo
+        ? '<div class="field"><label>Número de orden</label><div class="pref"><span id="fPre">' + esc(S.prefijo) + '</span><input id="fOrden" type="text" inputmode="numeric" autocomplete="off" placeholder="23100" autofocus></div>' +
+          '<div class="hint">Solo los números: queda ' + esc(S.prefijo) + '23100. Si escribís letras (ej. "PC mostrador"), se usa tal cual, sin el ' + esc(S.prefijo) + '</div></div>'
+        : '<div class="field"><label>Orden o etiqueta del equipo</label><input id="fOrden" type="text" placeholder="Ej: NG-23100" autofocus></div>') +
       '<div class="field"><label>Técnico</label>' + tecField + "</div>" +
       '<div class="field"><label>Antes de empezar</label><ul class="check"><li>Drivers de chipset y de video instalados (si faltan, el paso D los busca e instala solo).</li>' +
       "<li>BIOS en valores por defecto (sin PBO, undervolt ni OC) y XMP/EXPO apagado para la primera pasada.</li>" +
@@ -4838,6 +4846,15 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
     $("sGo").onclick = start;
     if ($("sDl")) $("sDl").onclick = function () { cmd({ cmd: "tools", what: "download" }); };
     setTimeout(function () { if ($("fOrden")) $("fOrden").focus(); }, 50);
+    if ($("fPre")) {
+      var pf = S.prefijo.replace(/[^A-Za-z]/g, "");
+      $("fOrden").oninput = function () {
+        var v = $("fOrden").value.trim();
+        // el prefijo se tacha cuando lo que se escribe no es un número (se va a usar tal cual)
+        var conPrefijo = !v || /^\d+$/.test(v) || (pf && new RegExp("^" + pf + "[\\s\\-_#]*\\d+$", "i").test(v));
+        $("fPre").className = conPrefijo ? "" : "sinpre";
+      };
+    }
   }
   function start() {
     var o = $("fOrden").value.trim(), t = $("fTec").value.trim();
@@ -5166,6 +5183,7 @@ function Get-UiSnapshot {
         tecnico    = $Global:M.Tecnico
         tecnicos   = @(Get-Tecnicos)
         previa     = $Global:SesionCortada
+        prefijo    = (Get-PrefijoOrden)
         cpu        = $(if ($Global:Cpu) { [ordered]@{ nombre = $Global:Cpu.Nombre; nucleos = $Global:Cpu.Nucleos; hilos = $Global:Cpu.Hilos } } else { $null })
         equipo     = [ordered]@{ mother = $e.Mother; bios = $e.BIOS; ram = $e.RamTexto; gpu = (@($e.GPU) -join ' + '); discos = (@($Global:M.Discos | ForEach-Object { '{0} ({1})' -f $_.Modelo, $_.Capacidad }) -join ' + ') }
         dedicada   = $hayDedicada
@@ -5184,11 +5202,29 @@ function Get-UiSnapshot {
     }
 }
 
+# Prefijo de las órdenes (config.txt: prefijo_orden=NG-). Si se cargan solo números, se le agrega;
+# "ng 23100" o "ng23100" quedan como NG-23100; cualquier otra etiqueta (ej. "PC mostrador") queda como está.
+function Get-PrefijoOrden {
+    $p = (Get-ConfigBanco)['prefijo_orden']
+    if ($null -eq $p) { return 'NG-' }
+    return [string]$p
+}
+
+function Format-Orden([string]$Orden) {
+    $o = ([string]$Orden).Trim()
+    $pre = Get-PrefijoOrden
+    if (-not $o -or -not $pre) { return $o }
+    $letras = ($pre -replace '[^A-Za-z]', '')
+    if ($o -match '^\d+$') { return $pre + $o }
+    if ($letras -and $o -match ('^(?i)' + [regex]::Escape($letras) + '[\s\-_#]*(\d+)$')) { return $pre + $Matches[1] }
+    return $o
+}
+
 function Start-Equipo([string]$Orden, [string]$Tecnico) {
     if ($Global:Started) { return }
     $Global:Ui.Busy = $true
     $Global:Ui.Task = 'Preparando el equipo'
-    $Global:M.Orden = $Orden.Trim()
+    $Global:M.Orden = Format-Orden $Orden
     $Global:M.Tecnico = $Tecnico.Trim()
     try {
         if ($Global:M.Tecnico) { New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null; $Global:M.Tecnico | Set-Content -Path (Join-Path $ReportDir '.ultimo_tecnico') -Encoding UTF8 }
@@ -6916,7 +6952,8 @@ function Main {
     Test-PreviousSession
     Initialize-Tools
     $Global:Cpu = Get-CpuInfo
-    $etq = (Read-Host 'Orden / etiqueta del equipo (Enter para omitir)').Trim()
+    $pre = Get-PrefijoOrden
+    $etq = Format-Orden (Read-Host ("Orden ({0}: solo los números) o etiqueta del equipo (Enter para omitir)" -f $(if ($pre) { $pre } else { 'sin prefijo' })))
     $tec = Select-Tecnico
     $Global:M.Orden = $etq
     $Global:M.Tecnico = $tec

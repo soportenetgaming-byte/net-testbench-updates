@@ -1,4 +1,4 @@
-﻿NET Gaming - Banco de pruebas (NET-TestBench) v2.9
+﻿NET Gaming - Banco de pruebas (NET-TestBench) v2.9.1
 ===================================================
 
 QUÉ ES
@@ -45,7 +45,10 @@ CÓMO SE USA
 2. Doble clic en Iniciar-TestBench.bat (pide permisos de administrador).
    Se abre una ventana con los pasos. La ventana de PowerShell queda minimizada:
    es el motor de las pruebas, no hay que cerrarla (se cierra sola con la interfaz).
-3. Cargar la orden y tocar Empezar (Enter).
+3. Cargar el número de orden y tocar Empezar (Enter). El "NG-" ya viene puesto: solo se
+   escriben los números (23100 queda NG-23100). Si se escribe algo con letras (ej. "PC
+   mostrador"), se usa tal cual. Para cambiar el prefijo: config.txt con  prefijo_orden=XX-
+   (o  prefijo_orden=  vacío para no usar ninguno).
 4. Seguir los pasos en orden, o tocar "Correr protocolo completo" (P):
    1  Chequeo general .............. 1 min   (si marca drivers faltantes, correr el paso D)
    D  Drivers: buscar e instalar ... 5-20 min (necesita internet; después reiniciar)
