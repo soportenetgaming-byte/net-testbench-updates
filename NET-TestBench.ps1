@@ -1,5 +1,5 @@
 ﻿<#
-    NET Gaming - Banco de pruebas de hardware usado  (v2.10)
+    NET Gaming - Banco de pruebas de hardware usado  (v2.11)
     -------------------------------------------------------
     CPU, motherboard, RAM (inventario/slots) y discos (SMART, lectura, escritura+verificación).
     Correr como administrador (usar Iniciar-TestBench.bat).
@@ -21,7 +21,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$Version = '2.10'
+$Version = '2.11'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $IsWin = [Environment]::OSVersion.Platform -eq 'Win32NT'
 
@@ -1495,7 +1495,7 @@ function Start-Report([string]$Etiqueta) {
         Log ("Programa actualizado solo: v{0} -> v{1}.{2}" -f $pz[0], $pz[1], $(if ($pz.Count -gt 2 -and $pz[2]) { ' Cambios: ' + $pz[2] } else { '' })) 'Green'
     }
     Log ("Fecha: {0}   Equipo/orden: {1}   PC: {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $(if ($Etiqueta) { $Etiqueta } else { '-' }), $env:COMPUTERNAME)
-    if ($Global:M.Suelta) { Log ("Placa de video suelta, probada en el banco{0}. El inventario de abajo es el del banco." -f $(if ($Global:M.Pieza) { " | N.º de serie termina en $($Global:M.Pieza)" } else { '' })) 'White' }
+    if ($Global:M.Suelta) { Log ("Placa de video suelta, probada en el banco{0}{1}. El inventario de abajo es el del banco." -f $(if ($Global:M.Pieza) { " | N.º de serie termina en $($Global:M.Pieza)" } else { '' }), $(if ($Global:M.Grupo) { " | va junto con el ticket $($Global:M.Grupo)" } else { '' })) 'White' }
     if ($Global:SesionCortada) {
         Log ("ANTECEDENTE: la sesión anterior se cortó durante '{0}' (posible cuelgue/reinicio)." -f $Global:SesionCortada) 'Red'
         if ($Global:SesionCortada -match 'fuente') {
@@ -2914,6 +2914,7 @@ function New-Session {
     Fecha    = (Get-Date -Format 's')
     Orden    = ''
     Pieza    = ''
+    Grupo    = ''
     Suelta   = $false
     Tecnico  = ''
     PC       = $env:COMPUTERNAME
@@ -3271,6 +3272,7 @@ function Save-Historial {
         Fecha        = (Get-Date -Format 'yyyy-MM-dd HH:mm')
         Orden        = $Global:M.Orden
         Pieza        = $Global:M.Pieza
+        Grupo        = $Global:M.Grupo
         Tecnico      = $Global:M.Tecnico
         CPU          = $(if ($Global:Cpu) { $Global:Cpu.Nombre } else { '' })
         Nucleos      = $(if ($Global:Cpu) { $Global:Cpu.Nucleos } else { '' })
@@ -3784,15 +3786,23 @@ function Get-FechaSesion($J) {
     return $d
 }
 
-# Los informes guardados (.json) de esa orden que tienen pieza. Si una placa se probó más de una vez, vale la última.
-function Get-SesionesOrden([string]$Orden) {
+# Las placas sueltas de un grupo, leídas de los informes guardados (.json) del último mes. Son del grupo las que
+# cargaron "va junto con <ticket>" y la del propio ticket; también las de una misma orden con distinto N.º de serie.
+# Cada placa es su ticket + su N.º de serie: si se probó más de una vez, vale la última.
+function Get-SesionesGrupo([string]$Grupo) {
     $ses = @{}
-    $pat = '*_' + (Get-NombreArchivo $Orden) + '_SN*.json'
-    foreach ($f in @(Get-ChildItem -Path (Join-Path $ReportDir 'detalle') -Filter $pat -File -ErrorAction SilentlyContinue)) {
+    $desde = (Get-Date).AddDays(-31)
+    foreach ($f in @(Get-ChildItem -Path (Join-Path $ReportDir 'detalle') -Filter '*.json' -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $desde })) {
         $j = $null
-        try { $j = [IO.File]::ReadAllText($f.FullName, [Text.Encoding]::UTF8) | ConvertFrom-Json } catch { continue }
-        if (-not $j -or -not $j.Pieza -or [string]$j.Orden -ne $Orden) { continue }
-        $k = ([string]$j.Pieza).ToUpper()
+        try {
+            $txt = [IO.File]::ReadAllText($f.FullName, [Text.Encoding]::UTF8)
+            if ($txt.IndexOf($Grupo, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+            $j = $txt | ConvertFrom-Json
+        } catch { continue }
+        if (-not $j -or -not $j.Suelta) { continue }
+        $clave = if ($j.Grupo) { [string]$j.Grupo } else { [string]$j.Orden }
+        if ($clave -ne $Grupo) { continue }
+        $k = ('{0}|{1}' -f $j.Orden, $j.Pieza).ToUpper()
         if (-not $ses.ContainsKey($k) -or (Get-FechaSesion $j) -gt (Get-FechaSesion $ses[$k])) { $ses[$k] = $j }
     }
     return @($ses.Values | Sort-Object { (Get-FechaSesion $_).Ticks })
@@ -3801,15 +3811,20 @@ function Get-SesionesOrden([string]$Orden) {
 function Export-InformeOrden {
     $Global:InformeOrdenPdf = $null
     $Global:InformeOrdenHtml = $null
-    $orden = [string]$Global:M.Orden
-    if (-not $orden -or -not $Global:M.Pieza) { return }
-    $ses = @(Get-SesionesOrden $orden)
+    $orden = Get-GrupoSesion
+    if (-not $orden -or -not $Global:M.Suelta) { return }
+    $ses = @(Get-SesionesGrupo $orden)
     if ($ses.Count -lt 2) { return }
     $n = $ses.Count
+    # cómo se nombra cada placa: por su ticket si son tickets distintos, y por el final del N.º de serie si se cargó
+    $tickets = @($ses | ForEach-Object { [string]$_.Orden } | Where-Object { $_ } | Select-Object -Unique)
+    $varios = $tickets.Count -gt 1
+    $etq = { param($j) $t = @(); if (($varios -or -not $j.Pieza) -and $j.Orden) { $t += [string]$j.Orden }; if ($j.Pieza) { $t += ('S/N …' + $j.Pieza) }; if ($t.Count) { $t -join ' · ' } else { 'Placa' } }
+    $titOrden = if (-not $varios) { 'Orden ' + $orden } elseif ($tickets.Count -le 4) { 'Órdenes ' + ($tickets -join ', ') } else { 'Órdenes ' + (($tickets | Select-Object -First 3) -join ', ') + (' y {0} más' -f ($tickets.Count - 3)) }
     $nF = @($ses | Where-Object { [string]$_.Resultado -eq 'FALLA' }).Count
     $nA = @($ses | Where-Object { [string]$_.Resultado -eq 'ATENCION' }).Count
     $nOk = $n - $nF - $nA
-    $vt = if ($nF) { @('fail', ('{0} de {1} placas con fallas' -f $nF, $n), 'Abajo está el detalle de cada placa, identificada por el final de su número de serie.') }
+    $vt = if ($nF) { @('fail', ('{0} de {1} placas con fallas' -f $nF, $n), 'Abajo está el detalle de cada placa, identificada por su orden o por el final de su número de serie.') }
     elseif ($nA) { @('warn', ('{0} de {1} placas con observaciones' -f $nA, $n), ('Las {0} placas superaron las pruebas de funcionamiento: {1} sin observaciones y {2} con puntos a tener en cuenta, detallados abajo.' -f $n, $nOk, $nA)) }
     else { @('ok', ('Las {0} placas sin fallas' -f $n), 'Todas completaron las pruebas automáticas sin errores.') }
     $sym = switch ($vt[0]) { 'ok' { '&#10003;' } 'warn' { '!' } default { '&#10005;' } }
@@ -3822,7 +3837,7 @@ function Export-InformeOrden {
     [void]$sb.Append(('<title>Informe de la orden {0}</title><style>{1}</style></head><body><div class="page">' -f (HtmlEnc $orden), $InformeCss))
     $brand = if ($logo) { '<img src="' + $logo + '" alt="NET Gaming">' } else { '<div class="word">NET <span>GAMING</span></div>' }
     [void]$sb.Append('<header class="top"><div class="brand">' + $brand + '</div><div class="doc"><b>Informe de diagnóstico de hardware</b>')
-    [void]$sb.Append('<span class="orden">Orden ' + (HtmlEnc $orden) + '</span> &middot; ' + $n + ' placas de video &middot; ' + (Get-Date -Format 'dd/MM/yyyy'))
+    [void]$sb.Append('<span class="orden">' + (HtmlEnc $titOrden) + '</span> &middot; ' + $n + ' placas de video &middot; ' + (Get-Date -Format 'dd/MM/yyyy'))
     $tecs = @($ses | ForEach-Object { [string]$_.Tecnico } | Where-Object { $_ } | Select-Object -Unique)
     if ($tecs.Count) { [void]$sb.Append('<br>Técnico: ' + (HtmlEnc ($tecs -join ', '))) }
     [void]$sb.Append('</div></header><main>')
@@ -3835,14 +3850,14 @@ function Export-InformeOrden {
     # las columnas sin ningún dato (placas sin sensor de memoria o de consumo) no se muestran
     $hayCol = { param($campo) [bool](@($ses | Where-Object { $null -ne $_.Gpu.$campo -and -not ($campo -eq 'GpuHotMax' -and (Test-Rtx50 (& $modeloDe $_))) }).Count) }
     $cH = & $hayCol 'GpuHotMax'; $cM = & $hayCol 'GpuMemMax'; $cP = & $hayCol 'GpuPowerMax'
-    [void]$sb.Append('<h2>Comparación de las placas</h2><table class="sum"><tr><th>N.º de serie</th><th>Modelo</th><th>Núcleo</th>' + $(if ($cH) { '<th>Hotspot</th>' }) + $(if ($cM) { '<th>Memoria</th>' }) + $(if ($cP) { '<th>Consumo</th>' }) + '<th>VRAM</th><th>Stress</th><th>Resultado</th></tr>')
+    [void]$sb.Append('<h2>Comparación de las placas</h2><table class="sum"><tr><th>Placa</th><th>Modelo</th><th>Núcleo</th>' + $(if ($cH) { '<th>Hotspot</th>' }) + $(if ($cM) { '<th>Memoria</th>' }) + $(if ($cP) { '<th>Consumo</th>' }) + '<th>VRAM</th><th>Stress</th><th>Resultado</th></tr>')
     foreach ($j in $ses) {
         $g = $j.Gpu
         $modelo = & $modeloDe $j
         $si = Get-StateInfo ([string]$j.Resultado)
         $hot = if (Test-Rtx50 $modelo) { $null } else { $g.GpuHotMax }
         $stress = if ($null -ne $g.StressMin -and [double]$g.StressMin -gt 0) { ('{0:N0} min, {1}' -f [double]$g.StressMin, $(if ($g.StressErr) { "$($g.StressErr) errores" } else { 'sin errores' })) } else { '-' }
-        [void]$sb.Append('<tr><td class="n">&hellip;' + (HtmlEnc $j.Pieza) + '</td><td>' + (HtmlEnc (& $corto $modelo)) + '</td>')
+        [void]$sb.Append('<tr><td class="n">' + (HtmlEnc (& $etq $j)) + '</td><td>' + (HtmlEnc (& $corto $modelo)) + '</td>')
         [void]$sb.Append((& $celda $g.GpuTempMax $mxT ' °C') + $(if ($cH) { & $celda $hot $mxH ' °C' }) + $(if ($cM) { & $celda $g.GpuMemMax $mxM ' °C' }) + $(if ($cP) { '<td>' + (& $val $g.GpuPowerMax ' W') + '</td>' }))
         [void]$sb.Append('<td>' + (HtmlEnc $(if ($g.VramRes) { $g.VramRes } else { '-' })) + '</td><td>' + (HtmlEnc $stress) + '</td>')
         [void]$sb.Append(('<td><span class="chip {0}">{1}</span></td></tr>' -f $si.Cls, $si.Txt))
@@ -3855,7 +3870,7 @@ function Export-InformeOrden {
         $g = $j.Gpu
         $modelo = & $modeloDe $j
         $si = Get-StateInfo ([string]$j.Resultado)
-        [void]$sb.Append(('<div class="card wide"><h3><span>Placa <span class="pz">&hellip;{0}</span> &middot; {1}</span><span class="chip {2}">{3}</span></h3>' -f (HtmlEnc $j.Pieza), (HtmlEnc (& $corto $modelo)), $si.Cls, $si.Txt))
+        [void]$sb.Append(('<div class="card wide"><h3><span><span class="pz">{0}</span> &middot; {1}</span><span class="chip {2}">{3}</span></h3>' -f (HtmlEnc (& $etq $j)), (HtmlEnc (& $corto $modelo)), $si.Cls, $si.Txt))
         $kv = @(Get-GpuKv $g $modelo | Where-Object { $_[0] -ne 'Modelo' })
         if ($kv.Count) {
             [void]$sb.Append('<dl class="kv">')
@@ -3882,9 +3897,9 @@ function Export-InformeOrden {
     $Global:InformeOrdenHtml = $htmlPath
     if (Convert-HtmlToPdf $htmlPath $pdfPath) {
         $Global:InformeOrdenPdf = $pdfPath
-        Log ("Informe de la orden completa ({0} placas, una al lado de la otra): {1}" -f $n, $pdfPath) 'White'
+        Log ("Informe conjunto ({0} placas comparadas: {1}): {2}" -f $n, (@($ses | ForEach-Object { & $etq $_ }) -join ', '), $pdfPath) 'White'
     } else {
-        Log ("  Informe de la orden completa ({0} placas): no se pudo pasar a PDF ({1}); queda en {2}" -f $n, $Global:PdfMotivo, $htmlPath) 'Yellow'
+        Log ("  Informe conjunto ({0} placas): no se pudo pasar a PDF ({1}); queda en {2}" -f $n, $Global:PdfMotivo, $htmlPath) 'Yellow'
     }
 }
 
@@ -5078,6 +5093,7 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
       h += '<span class="orden">Orden <b>' + esc(S.orden || "-") + "</b></span>";
       if (S.pieza) h += '<span class="orden">Placa S/N <b>…' + esc(S.pieza) + "</b></span>";
       else if (S.suelta) h += "<span>Placa suelta</span>";
+      if (S.grupo) h += "<span>Va con <b>" + esc(S.grupo) + "</b></span>";
       h += "<span>Técnico <b>" + esc(S.tecnico || "-") + "</b></span>";
       h += '<button class="hbtn" id="bNuevo">Nuevo equipo <kbd>N</kbd></button>';
     }
@@ -5112,7 +5128,11 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
         : '<div class="field"><label>Orden o etiqueta del equipo</label><input id="fOrden" type="text" placeholder="Ej: NG-23100" autofocus></div>') +
       '<div class="field"><label class="chk"><input type="checkbox" id="fSuelta"' + (S.banco ? " checked" : "") + '> Es una placa de video suelta (esta PC es el banco de pruebas)</label>' +
       '<div id="fPiezaBox"' + (S.banco ? "" : ' style="display:none"') + '><input id="fPieza" type="text" maxlength="12" style="width:100%;margin-top:6px" autocomplete="off" placeholder="Final del N.º de serie de la placa (ej. 4826)">' +
-      '<div class="hint">Opcional. Si la orden trae varias placas, cargá la misma orden y el final del S/N de cada una: además del informe de cada placa sale uno solo de la orden, con todas comparadas.</div></div></div>' +
+      '<div class="hint">Opcional: sirve para saber cuál es cuál cuando hay varias placas iguales.</div>' +
+      '<label style="margin-top:10px;display:block">¿Va junto con otra placa del mismo cliente?</label>' +
+      '<input id="fGrupo" type="text" maxlength="24" autocomplete="off" style="width:100%;margin-top:6px" placeholder="Ticket de la primera placa (ej. 23421). Vacío si va sola o es la primera">' +
+      (S.grupoSugerido ? '<button type="button" class="act" id="fGrupoSug" style="margin-top:6px">Mismo grupo que la anterior: <b>' + esc(S.grupoSugerido) + "</b></button>" : "") +
+      '<div class="hint">Cuando un cliente trae varias placas y cada una tiene su ticket: en la primera no pongas nada; en las siguientes poné el ticket de la primera. Sale un informe de cada placa y uno solo con todas comparadas.</div></div></div>' +
       '<div class="field"><label>Técnico</label>' + tecField + "</div>" +
       '<div class="field"><label>Antes de empezar</label><ul class="check"><li>Drivers de chipset y de video instalados (si faltan, el paso D los busca e instala solo).</li>' +
       "<li>BIOS en valores por defecto (sin PBO, undervolt ni OC) y XMP/EXPO apagado para la primera pasada.</li>" +
@@ -5121,6 +5141,7 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
     $("sGo").onclick = start;
     if ($("sDl")) $("sDl").onclick = function () { cmd({ cmd: "tools", what: "download" }); };
     $("fSuelta").onchange = function () { $("fPiezaBox").style.display = $("fSuelta").checked ? "" : "none"; };
+    if ($("fGrupoSug")) $("fGrupoSug").onclick = function () { $("fGrupo").value = S.grupoSugerido; $("fGrupo").focus(); };
     setTimeout(function () { if ($("fOrden")) $("fOrden").focus(); }, 50);
     if ($("fPre")) {
       var pf = S.prefijo.replace(/[^A-Za-z]/g, "");
@@ -5137,7 +5158,7 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
     var o = $("fOrden").value.trim(), t = $("fTec").value.trim();
     if (t && (S.tecnicos || []).indexOf(t) < 0) cmd({ cmd: "tecnico", nombre: t });
     var su = $("fSuelta").checked;
-    cmd({ cmd: "start", orden: o, tecnico: t, suelta: su, pieza: su ? $("fPieza").value.trim() : "" });
+    cmd({ cmd: "start", orden: o, tecnico: t, suelta: su, pieza: su ? $("fPieza").value.trim() : "", grupo: su ? $("fGrupo").value.trim() : "" });
     $("sGo").disabled = true; $("sGo").textContent = "Preparando...";
   }
 
@@ -5467,6 +5488,8 @@ function Get-UiSnapshot {
         prefijo    = (Get-PrefijoOrden)
         prefijoMin = (Get-OrdenMinDigitos)
         pieza      = $Global:M.Pieza
+        grupo      = $Global:M.Grupo
+        grupoSugerido = $(if ($Global:Started) { '' } else { Get-UltimoGrupo })
         suelta     = [bool]$Global:M.Suelta
         banco      = (Get-EsBanco)
         informeOrden = [bool]($Global:InformeOrdenPdf -and (Test-Path $Global:InformeOrdenPdf))
@@ -5517,6 +5540,36 @@ function Set-EsBanco([bool]$Si) {
     } catch {}
 }
 
+# Grupo: cuando cada placa de un cliente entra con su propio ticket, en la segunda (y las siguientes) se carga
+# "va junto con el ticket <el de la primera>". Ese ticket es el nombre del grupo y del informe que las junta.
+function Format-Grupo([string]$Grupo, [string]$Orden) {
+    $g = Format-Orden $Grupo
+    if ($g -and $g -eq $Orden) { return '' }
+    return $g
+}
+
+# El último grupo usado en esta PC (hasta 6 horas): la interfaz lo ofrece para la placa siguiente
+function Get-UltimoGrupo {
+    try {
+        $p = @(([string](Get-Content -Path (Join-Path $ReportDir '.ultimo_grupo') -Raw -ErrorAction Stop)).Trim() -split '\|')
+        if ($p.Count -ge 3 -and $p[0] -eq [string]$env:COMPUTERNAME -and $p[1] -and ((Get-Date) - (New-Object datetime ([long]$p[2]))).TotalHours -lt 6) { return [string]$p[1] }
+    } catch {}
+    return ''
+}
+
+function Set-UltimoGrupo([string]$Grupo) {
+    if (-not $Grupo) { return }
+    try {
+        New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
+        [IO.File]::WriteAllText((Join-Path $ReportDir '.ultimo_grupo'), ('{0}|{1}|{2}' -f $env:COMPUTERNAME, $Grupo, (Get-Date).Ticks))
+    } catch {}
+}
+
+function Get-GrupoSesion {
+    if ($Global:M.Grupo) { return [string]$Global:M.Grupo }
+    return [string]$Global:M.Orden
+}
+
 function Format-Pieza([string]$Pieza) {
     $p = (([string]$Pieza) -replace '[^A-Za-z0-9\-]', '').ToUpper()
     if ($p.Length -gt 12) { $p = $p.Substring($p.Length - 12) }
@@ -5544,14 +5597,16 @@ function Format-Orden([string]$Orden) {
     return $o
 }
 
-function Start-Equipo([string]$Orden, [string]$Tecnico, [string]$Pieza = '', [bool]$Suelta = $false) {
+function Start-Equipo([string]$Orden, [string]$Tecnico, [string]$Pieza = '', [bool]$Suelta = $false, [string]$Grupo = '') {
     if ($Global:Started) { return }
     $Global:Ui.Busy = $true
     $Global:Ui.Task = 'Preparando el equipo'
     $Global:M.Orden = Format-Orden $Orden
     $Global:M.Pieza = Format-Pieza $Pieza
-    $Global:M.Suelta = [bool]($Suelta -or $Global:M.Pieza)
+    $Global:M.Grupo = Format-Grupo $Grupo $Global:M.Orden
+    $Global:M.Suelta = [bool]($Suelta -or $Global:M.Pieza -or $Global:M.Grupo)
     Set-EsBanco $Global:M.Suelta
+    if ($Global:M.Suelta) { Set-UltimoGrupo (Get-GrupoSesion) }
     $Global:M.Tecnico = $Tecnico.Trim()
     try {
         if ($Global:M.Tecnico) { New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null; $Global:M.Tecnico | Set-Content -Path (Join-Path $ReportDir '.ultimo_tecnico') -Encoding UTF8 }
@@ -5658,7 +5713,7 @@ function Invoke-UiCommand([string]$Json) {
     $c = $null
     try { $c = $Json | ConvertFrom-Json } catch { return }
     switch ([string]$c.cmd) {
-        'start' { Start-Equipo ([string]$c.orden) ([string]$c.tecnico) ([string]$c.pieza) ([bool]$c.suelta) }
+        'start' { Start-Equipo ([string]$c.orden) ([string]$c.tecnico) ([string]$c.pieza) ([bool]$c.suelta) ([string]$c.grupo) }
         'step' { if (-not $Global:Ui.Busy) { Invoke-Step ([string]$c.id) $c.opts } }
         'protocolo' { if ($Global:Started) { Invoke-UiProtocolo $c.opts } }
         'informe' { if ($Global:Started) { Invoke-UiInforme; if ($Global:InformeHtml) { Start-Process (Get-InformeParaAbrir) } } }
@@ -7294,6 +7349,10 @@ function Main {
     if (Ask-Yes '¿Es una placa de video suelta (esta PC es el banco de pruebas)?' $esBanco) {
         $Global:M.Suelta = $true
         $Global:M.Pieza = Format-Pieza (Read-Host 'Últimos 4 o 5 dígitos del N.º de serie de la placa (Enter para omitir)')
+        $sug = Get-UltimoGrupo
+        $gr = Read-Host ("¿Va junto con otro ticket del mismo cliente? Ticket de la primera placa{0} (Enter = no, va sola o es la primera)" -f $(if ($sug) { " [la anterior fue del grupo $sug]" } else { '' }))
+        $Global:M.Grupo = Format-Grupo $gr $etq
+        Set-UltimoGrupo $(if ($Global:M.Grupo) { $Global:M.Grupo } else { $etq })
     }
     Set-EsBanco ([bool]$Global:M.Suelta)
     $tec = Select-Tecnico

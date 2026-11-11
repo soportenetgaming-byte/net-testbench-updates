@@ -1,4 +1,4 @@
-﻿NET Gaming - Banco de pruebas (NET-TestBench) v2.10
+﻿NET Gaming - Banco de pruebas (NET-TestBench) v2.11
 ===================================================
 
 QUÉ ES
@@ -54,6 +54,9 @@ CÓMO SE USA
    la placa y no el procesador ni la mother del banco. Si la orden trae varias placas, cargar en cada
    una la misma orden y el final de su N.º de serie (ej. 4826): además del informe de cada placa sale
    <orden>_resumen.pdf, uno solo con todas comparadas, que se actualiza con cada placa que se prueba.
+   Si cada placa del cliente tiene SU PROPIO TICKET: en la primera no cargar nada más; en las siguientes,
+   en "¿Va junto con otra placa del mismo cliente?" poner el ticket de la primera (el programa ofrece el
+   último usado con un botón). El informe conjunto queda como <ticket de la primera>_resumen.pdf.
 4. Seguir los pasos en orden, o tocar "Correr protocolo completo" (P):
    1  Chequeo general .............. 1 min   (si marca drivers faltantes, correr el paso D)
    D  Drivers: buscar e instalar ... 5-20 min (necesita internet; después reiniciar)

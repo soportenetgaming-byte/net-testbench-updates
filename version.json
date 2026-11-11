@@ -1,23 +1,17 @@
 {
-  "version": "2.10",
+  "version": "2.11",
   "fecha": "2026-11-11",
   "cambios": [
-    "Varias placas en una orden: cargando la orden y el final del N.º de serie de cada placa, sale además un informe único de la orden con todas comparadas",
-    "Placa suelta: el informe muestra la placa (no el procesador ni la mother del banco) y entra en una hoja",
-    "Stress de GPU: ya no tiene tope de capas ni de cuadros, así las placas de gama alta y las NVIDIA llegan al 100%",
-    "Identidad: la RX 5500 XT (y otras Radeon XT que comparten ID con la común) ya no sale como \"no coincide\"",
-    "Enlace PCIe: en Radeon se lee el enlace real con la mother (antes salía x16 Gen4/Gen5 siempre) y en NVIDIA el del momento",
-    "Orden: el NG- se agrega solo con 5 dígitos o más (\"4060\" o \"3090\" quedan como etiqueta)",
-    "PDF: si el primer intento falla, reintenta; el gráfico solo muestra las curvas que la placa informa"
+    "Varias placas del mismo cliente con un ticket cada una: en la segunda y las siguientes se carga \"va junto con el ticket de la primera\" y sale un informe único con todas comparadas, cada una con su ticket"
   ],
   "archivos": [
     {
       "nombre": "NET-TestBench.ps1",
-      "sha256": "AEF34610D4C16141BC2E863AA4C0C5F19AB510744128ED303E191820E9B78ADD"
+      "sha256": "3B6FEE7BBB7163E5AF8DB5E3A13B3EE12EBD622D94E7ED7CC06111D36E36D5C9"
     },
     {
       "nombre": "LEEME.txt",
-      "sha256": "4B2E07DAF5A736B4AC40537EA4085EA981F533D8316B5AF46DB5BE2A9C432A8B"
+      "sha256": "8AB06FD1DB4A1E894BC1755F8CDBA7E3B21DCF90CD664205928CE5CAD9A4DB51"
     }
   ]
 }
