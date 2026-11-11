@@ -1,21 +1,23 @@
 {
-  "version": "2.9.2",
+  "version": "2.10",
   "fecha": "2026-11-11",
   "cambios": [
-    "Stress de GPU y prueba de fuente: si la ventana se cierra, se cuelga o se corta, ya no sale como \"OK\"",
-    "Historial: los números se leen bien aunque el Windows de la PC esté en otro idioma; suma columnas de fuente y TestMem5",
-    "TestMem5: sigue vigilando si el programa se reinicia solo",
-    "Actualización: la descarga ya no puede traer una copia vieja en caché",
-    "Hotspot: las RTX 5000 de workstation ya no se confunden con la serie RTX 50"
+    "Varias placas en una orden: cargando la orden y el final del N.º de serie de cada placa, sale además un informe único de la orden con todas comparadas",
+    "Placa suelta: el informe muestra la placa (no el procesador ni la mother del banco) y entra en una hoja",
+    "Stress de GPU: ya no tiene tope de capas ni de cuadros, así las placas de gama alta y las NVIDIA llegan al 100%",
+    "Identidad: la RX 5500 XT (y otras Radeon XT que comparten ID con la común) ya no sale como \"no coincide\"",
+    "Enlace PCIe: en Radeon se lee el enlace real con la mother (antes salía x16 Gen4/Gen5 siempre) y en NVIDIA el del momento",
+    "Orden: el NG- se agrega solo con 5 dígitos o más (\"4060\" o \"3090\" quedan como etiqueta)",
+    "PDF: si el primer intento falla, reintenta; el gráfico solo muestra las curvas que la placa informa"
   ],
   "archivos": [
     {
       "nombre": "NET-TestBench.ps1",
-      "sha256": "D090AED13A2FE429D56424B444D780BF10DC1D15BEE43A63AC5FA44890944216"
+      "sha256": "AEF34610D4C16141BC2E863AA4C0C5F19AB510744128ED303E191820E9B78ADD"
     },
     {
       "nombre": "LEEME.txt",
-      "sha256": "ED24CCB42139E609CD55266CACE3D80BB84A4C5F9B8C16E174626F2C0BB4A547"
+      "sha256": "4B2E07DAF5A736B4AC40537EA4085EA981F533D8316B5AF46DB5BE2A9C432A8B"
     }
   ]
 }

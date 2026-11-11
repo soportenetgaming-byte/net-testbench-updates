@@ -1,4 +1,4 @@
-﻿NET Gaming - Banco de pruebas (NET-TestBench) v2.9.2
+﻿NET Gaming - Banco de pruebas (NET-TestBench) v2.10
 ===================================================
 
 QUÉ ES
@@ -48,7 +48,12 @@ CÓMO SE USA
 3. Cargar el número de orden y tocar Empezar (Enter). El "NG-" ya viene puesto: solo se
    escriben los números (23100 queda NG-23100). Si se escribe algo con letras (ej. "PC
    mostrador"), se usa tal cual. Para cambiar el prefijo: config.txt con  prefijo_orden=XX-
-   (o  prefijo_orden=  vacío para no usar ninguno).
+   (o  prefijo_orden=  vacío para no usar ninguno). El prefijo se agrega con 5 dígitos o más: "4060"
+   queda como etiqueta (para cambiarlo: orden_min_digitos=4).
+   PLACAS SUELTAS: tildar "Es una placa de video suelta" (queda recordado en esa PC). El informe muestra
+   la placa y no el procesador ni la mother del banco. Si la orden trae varias placas, cargar en cada
+   una la misma orden y el final de su N.º de serie (ej. 4826): además del informe de cada placa sale
+   <orden>_resumen.pdf, uno solo con todas comparadas, que se actualiza con cada placa que se prueba.
 4. Seguir los pasos en orden, o tocar "Correr protocolo completo" (P):
    1  Chequeo general .............. 1 min   (si marca drivers faltantes, correr el paso D)
    D  Drivers: buscar e instalar ... 5-20 min (necesita internet; después reiniciar)

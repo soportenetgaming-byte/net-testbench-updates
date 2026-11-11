@@ -1,5 +1,5 @@
 ﻿<#
-    NET Gaming - Banco de pruebas de hardware usado  (v2.9.2)
+    NET Gaming - Banco de pruebas de hardware usado  (v2.10)
     -------------------------------------------------------
     CPU, motherboard, RAM (inventario/slots) y discos (SMART, lectura, escritura+verificación).
     Correr como administrador (usar Iniciar-TestBench.bat).
@@ -21,7 +21,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$Version = '2.9.2'
+$Version = '2.10'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $IsWin = [Environment]::OSVersion.Platform -eq 'Win32NT'
 
@@ -1481,6 +1481,7 @@ function Start-Report([string]$Etiqueta) {
     if ($cpuName -match '(i[3579]-\w+|Ryzen \d+ (PRO )?\w+|Ultra \d \w+|Xeon \S+|Athlon \S+|Pentium \S+|Celeron \S+)') { $short = $Matches[1] }
     $parts = @((Get-Date -Format 'yyyyMMdd-HHmm'))
     if ($Etiqueta) { $parts += $Etiqueta }
+    if ($Global:M.Pieza) { $parts += ('SN' + $Global:M.Pieza) }
     $parts += $short
     $name = (($parts -join '_') -replace '[\\/:*?"<>|]', '' -replace '\s+', '-') + '.txt'
     $det = Join-Path $ReportDir 'detalle'
@@ -1494,6 +1495,7 @@ function Start-Report([string]$Etiqueta) {
         Log ("Programa actualizado solo: v{0} -> v{1}.{2}" -f $pz[0], $pz[1], $(if ($pz.Count -gt 2 -and $pz[2]) { ' Cambios: ' + $pz[2] } else { '' })) 'Green'
     }
     Log ("Fecha: {0}   Equipo/orden: {1}   PC: {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $(if ($Etiqueta) { $Etiqueta } else { '-' }), $env:COMPUTERNAME)
+    if ($Global:M.Suelta) { Log ("Placa de video suelta, probada en el banco{0}. El inventario de abajo es el del banco." -f $(if ($Global:M.Pieza) { " | N.º de serie termina en $($Global:M.Pieza)" } else { '' })) 'White' }
     if ($Global:SesionCortada) {
         Log ("ANTECEDENTE: la sesión anterior se cortó durante '{0}' (posible cuelgue/reinicio)." -f $Global:SesionCortada) 'Red'
         if ($Global:SesionCortada -match 'fuente') {
@@ -1513,7 +1515,8 @@ function Show-Inventario {
     $bios = Get-CimInstance Win32_BIOS | Select-Object -First 1
     $os = Get-CimInstance Win32_OperatingSystem
     $mods = @(Get-CimInstance Win32_PhysicalMemory)
-    $gpus = @(Get-CimInstance Win32_VideoController)
+    # sin los adaptadores virtuales (visor de realidad virtual, escritorio remoto, monitores virtuales): no son placas
+    $gpus = @(Get-CimInstance Win32_VideoController | Where-Object { [string]$_.Name -notmatch 'Virtual|Parsec|IddCx|Idd Sample|Remote Display|DisplayLink|spacedesk|Citrix|Mirror Driver|TeamViewer|AnyDesk|Sunshine' })
     $Global:Boot = $os.LastBootUpTime
 
     Log ("CPU     : {0}" -f $c.Nombre) 'White'
@@ -2900,6 +2903,8 @@ function New-Session {
     $Global:ReportFile = $null
     $Global:InformeHtml = $null
     $Global:InformePdf = $null
+    $Global:InformeOrdenPdf = $null
+    $Global:InformeOrdenHtml = $null
     $Global:StepState = @{}
     $Global:Started = $false
     $Global:GpuIdDone = $false
@@ -2908,6 +2913,8 @@ function New-Session {
     Version  = $Version
     Fecha    = (Get-Date -Format 's')
     Orden    = ''
+    Pieza    = ''
+    Suelta   = $false
     Tecnico  = ''
     PC       = $env:COMPUTERNAME
     Equipo   = [ordered]@{}
@@ -3263,6 +3270,7 @@ function Save-Historial {
         Sesion       = $Global:M.Sesion
         Fecha        = (Get-Date -Format 'yyyy-MM-dd HH:mm')
         Orden        = $Global:M.Orden
+        Pieza        = $Global:M.Pieza
         Tecnico      = $Global:M.Tecnico
         CPU          = $(if ($Global:Cpu) { $Global:Cpu.Nombre } else { '' })
         Nucleos      = $(if ($Global:Cpu) { $Global:Cpu.Nucleos } else { '' })
@@ -3291,10 +3299,10 @@ function Save-Historial {
         GpuFabricante = $Global:M.Gpu['Fabricante']
         GpuVbios     = $Global:M.Gpu['Vbios']
         GpuCoincide  = $Global:M.Gpu['Coincide']
-        GpuPuntaje   = $Global:M.Gpu['Score']   # carga tipo FurMark (v2.8+); GpuScore era la carga anterior
+        GpuPuntaje2  = $Global:M.Gpu['Score']   # v2.10+: sin tope de capas ni de cuadros. GpuPuntaje (2.8-2.9) y GpuScore eran cargas anteriores, no comparables
         VramGBs      = $Global:M.Gpu['VramGBs']
         GpuDif       = $Global:M.Gpu['GpuDeltaMax']
-        Resultado    = (Get-WorstState @($st.Values))
+        Resultado    = (Get-ResultadoSesion)
         CPU_Estado   = $st['CPU']
         Mother_Estado = $st['Motherboard']
         RAM_Estado   = $st['RAM']
@@ -3447,12 +3455,17 @@ function Get-TempChartSvg($Serie) {
         $anc = if ($fr -eq 0) { 'start' } elseif ($fr -eq 1) { 'end' } else { 'middle' }
         [void]$sb.Append([string]::Format($ci, '<text x="{0:F1}" y="{1}" font-size="11" fill="#5b6472" text-anchor="{2}">{3}</text>', $tx, ($H - 8), $anc, $lab))
     }
+    $hay = @{}
     foreach ($ser in @(@(3, '#38bdf8'), @(1, '#F13E88'), @(2, '#FFA601'))) {
         $coords = @()
         foreach ($p in $pts) { if ($null -ne $p[$ser[0]]) { $coords += [string]::Format($ci, '{0:F1},{1:F1}', (& $X $p[0]), (& $Y $p[$ser[0]])) } }
-        if ($coords.Count -ge 2) { [void]$sb.Append(('<polyline fill="none" stroke="{0}" stroke-width="2.4" stroke-linejoin="round" points="{1}"/>' -f $ser[1], ($coords -join ' '))) }
+        if ($coords.Count -ge 2) { $hay[$ser[0]] = $true; [void]$sb.Append(('<polyline fill="none" stroke="{0}" stroke-width="2.4" stroke-linejoin="round" points="{1}"/>' -f $ser[1], ($coords -join ' '))) }
     }
-    [void]$sb.Append('</svg><div class="lg"><span><i style="background:#F13E88"></i>Núcleo</span><span><i style="background:#FFA601"></i>Punto más caliente (hotspot)</span><span><i style="background:#38bdf8"></i>Memoria de video</span><span>Temperaturas durante el stress de la placa de video</span></div></div>')
+    [void]$sb.Append('</svg><div class="lg">')
+    if ($hay[1]) { [void]$sb.Append('<span><i style="background:#F13E88"></i>Núcleo</span>') }
+    if ($hay[2]) { [void]$sb.Append('<span><i style="background:#FFA601"></i>Punto más caliente (hotspot)</span>') }
+    if ($hay[3]) { [void]$sb.Append('<span><i style="background:#38bdf8"></i>Memoria de video</span>') }
+    [void]$sb.Append('<span>Temperaturas durante el stress de la placa de video</span></div></div>')
     return $sb.ToString()
 }
 
@@ -3465,42 +3478,31 @@ function Get-StateInfo([string]$Estado) {
 }
 
 function Convert-HtmlToPdf([string]$Html, [string]$Pdf) {
+    $Global:PdfMotivo = ''
     $b = Find-Browser
-    if (-not $b) { return $false }
-    $prof = Join-Path ([IO.Path]::GetTempPath()) ('netbench-pdf-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    if (-not $b) { $Global:PdfMotivo = 'no se encontró Edge ni Chrome'; return $false }
     $uri = (New-Object System.Uri([IO.Path]::GetFullPath($Html))).AbsoluteUri
     Remove-Item -Path $Pdf -Force -ErrorAction SilentlyContinue
-    $pargs = @('--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--disable-extensions',
-        "--user-data-dir=`"$prof`"", '--no-pdf-header-footer', '--print-to-pdf-no-header', "--print-to-pdf=`"$Pdf`"", $uri)
-    try {
-        $pp = if ($IsWin) { Start-Process -FilePath $b -ArgumentList $pargs -PassThru -WindowStyle Hidden } else { Start-Process -FilePath $b -ArgumentList $pargs -PassThru }
-        if (-not $pp.WaitForExit(90000)) { try { $pp.Kill() } catch {} }
-    } catch { return $false }
-    $t0 = Get-Date
-    while (((Get-Date) - $t0).TotalSeconds -lt 10 -and -not ((Test-Path $Pdf) -and (Get-Item $Pdf).Length -gt 1000)) { Start-Sleep -Milliseconds 300 }
-    Remove-Item -Path $prof -Recurse -Force -ErrorAction SilentlyContinue
-    return ((Test-Path $Pdf) -and (Get-Item $Pdf).Length -gt 1000)
+    $listo = { (Test-Path $Pdf) -and (Get-Item $Pdf).Length -gt 1000 }
+    # dos intentos: en PCs lentas (o recién terminado un stress) el primero a veces no llega a escribir el archivo
+    foreach ($modo in '--headless=new', '--headless') {
+        $prof = Join-Path ([IO.Path]::GetTempPath()) ('netbench-pdf-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        $pargs = @($modo, '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--disable-extensions',
+            "--user-data-dir=`"$prof`"", '--no-pdf-header-footer', '--print-to-pdf-no-header', "--print-to-pdf=`"$Pdf`"", $uri)
+        try {
+            $pp = if ($IsWin) { Start-Process -FilePath $b -ArgumentList $pargs -PassThru -WindowStyle Hidden } else { Start-Process -FilePath $b -ArgumentList $pargs -PassThru }
+            if (-not $pp.WaitForExit(90000)) { try { $pp.Kill() } catch {}; $Global:PdfMotivo = 'el navegador tardó más de 90 s' }
+        } catch { $Global:PdfMotivo = 'no se pudo abrir el navegador: ' + $_.Exception.Message }
+        $t0 = Get-Date
+        while (((Get-Date) - $t0).TotalSeconds -lt 10 -and -not (& $listo)) { Start-Sleep -Milliseconds 300 }
+        Remove-Item -Path $prof -Recurse -Force -ErrorAction SilentlyContinue
+        if (& $listo) { $Global:PdfMotivo = ''; return $true }
+    }
+    if (-not $Global:PdfMotivo) { $Global:PdfMotivo = 'el navegador no generó el archivo' }
+    return $false
 }
 
-function Export-Informe {
-    if (-not $Global:ReportFile) { return $null }
-    $base = [IO.Path]::ChangeExtension($Global:ReportFile, $null).TrimEnd('.')
-    $htmlPath = $base + '.html'
-    $jsonPath = $base + '.json'
-    $e = $Global:M.Equipo; $c = $Global:M.Cpu; $s = $Global:SesionSensores
-    $worst = Get-WorstState @($Global:Verdicts.Values | ForEach-Object { $_.Estado })
-    $vt = switch ($worst) {
-        'FALLA' { @('fail', 'Se detectaron fallas', 'Al menos un componente no superó las pruebas. El detalle está en las observaciones.') }
-        'ATENCION' { @('warn', 'Apto con observaciones', 'El equipo superó las pruebas de funcionamiento; hay puntos a tener en cuenta, detallados abajo.') }
-        default { @('ok', 'Sin fallas detectadas', 'Todas las pruebas automáticas se completaron sin errores.') }
-    }
-    $fecha = $Global:M.Fecha
-    $dt = [datetime]::MinValue
-    if ([datetime]::TryParse([string]$Global:M.Fecha, [ref]$dt)) { $fecha = $dt.ToString('dd/MM/yyyy HH:mm') }
-    $logo = Get-LogoDataUri
-    $sb = New-Object System.Text.StringBuilder
-
-    $css = @'
+$InformeCss = @'
 :root { --magenta:#EA06CF; --rosa:#F13E88; --naranja:#FFA601; --accent:#F13E88;
         --grad:linear-gradient(90deg, #EA06CF 0%, #F13E88 50%, #FFA601 100%); --ink:#14181f; --muted:#5b6472; --line:#e3e7ee; --bg:#f4f6f9; --card:#ffffff;
         --ok:#15803d; --ok-bg:#e7f6ec; --warn:#b45309; --warn-bg:#fdf3e1; --fail:#b91c1c; --fail-bg:#fde8e8; }
@@ -3531,7 +3533,16 @@ table.spec th { text-align:left; width:150px; color:var(--muted); font-weight:60
 table.spec th, table.spec td { padding:6px 0; border-bottom:1px solid var(--line); }
 .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(380px, 1fr)); gap:14px; }
 .card { border:1px solid var(--line); border-radius:12px; padding:14px 16px; break-inside:avoid; }
-.card.wide { grid-column:1 / -1; }
+.card.wide { grid-column:1 / -1; break-inside:auto; }
+.kv, .chart, .obs li, table.tests tr, table.sum tr, .verdict { break-inside:avoid; }
+h2, .card h3 { break-after:avoid; }
+table.sum { width:100%; border-collapse:collapse; font-size:13px; }
+table.sum th { text-align:left; color:var(--muted); font-weight:600; border-bottom:2px solid var(--line); padding:6px 8px 6px 0; }
+table.sum td { border-bottom:1px solid var(--line); padding:7px 8px 7px 0; vertical-align:top; }
+table.sum td.n { font-weight:800; white-space:nowrap; }
+table.sum td.hi { color:var(--warn); font-weight:700; }
+.pz { color:#c2410c; font-weight:800; letter-spacing:.03em; }
+.nota { color:var(--muted); font-size:12.5px; margin:8px 0 0; }
 .chart { margin-top:12px; }
 .chart svg { width:100%; height:auto; display:block; }
 .chart .lg { display:flex; gap:16px; font-size:12px; color:var(--muted); margin-top:4px; flex-wrap:wrap; }
@@ -3555,6 +3566,62 @@ footer { margin-top:26px; padding:16px 32px 22px; border-top:1px solid var(--lin
   header.top, header.top::after, h2::before, .word span, .verdict, .chip, .obs li, .chart { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   @page { size:A4; margin:10mm; } }
 '@
+
+# Filas "dato / valor" de la placa de video. $g es $Global:M.Gpu o el bloque Gpu de un informe guardado (.json)
+function Get-GpuKv($g, [string]$ModeloAlt) {
+    $kv = New-Object System.Collections.ArrayList
+    if (-not $g) { return $kv }
+    $modelo = if ($g.Modelo) { $g.Modelo } elseif ($g.VramDispositivo) { $g.VramDispositivo } else { $ModeloAlt }
+    if ($modelo) { [void]$kv.Add(@('Modelo', (HtmlEnc $modelo))) }
+    if ($null -ne $g.Coincide) {
+        $var = if ($g.Variante) { ' · ' + $g.Variante } else { '' }
+        $txtId = if ($g.Coincide) { 'Original: el chip {0} corresponde al modelo{1}' -f $g.Chip, $var } else { 'NO coincide: el chip real es {0}' -f $g.ChipNombre }
+        [void]$kv.Add(@('Identidad de la placa', (HtmlEnc $txtId)))
+    }
+    if ($g.Fabricante) { [void]$kv.Add(@('Fabricante', (HtmlEnc $g.Fabricante))) }
+    if ($g.VramGB) { [void]$kv.Add(@('Memoria de video', ('{0} GB' -f $g.VramGB))) }
+    if ($g.Vbios) { [void]$kv.Add(@('BIOS de video', (HtmlEnc $g.Vbios))) }
+    if ($g.VramRes) { [void]$kv.Add(@('Memoria de video (VRAM)', ('{0} <span class="sub">(se verificó toda la memoria, {1:N0} min)</span>' -f (HtmlEnc $g.VramRes), $g.VramMin))) }
+    if ($null -ne $g.StressMin -and $g.StressMin -gt 0) {
+        [void]$kv.Add(@('Stress con verificación', ('{0:N0} min, {1}' -f $g.StressMin, $(if ($g.StressErr) { "$($g.StressErr) errores" } else { 'sin errores' }))))
+    }
+    if ($null -ne $g.GpuTempMax) { [void]$kv.Add(@('Temperatura del núcleo', ('{0} °C <span class="sub">(la que muestran FurMark y GPU-Z)</span>' -f $g.GpuTempMax))) }
+    if ($null -ne $g.GpuHotMax -and -not (Test-Rtx50 $modelo)) {   # en RTX 50 no hay lectura oficial
+        $dl = if ($null -ne $g.GpuDeltaMax) { ' <span class="sub">({0} °C sobre el núcleo)</span>' -f $g.GpuDeltaMax } else { '' }
+        [void]$kv.Add(@('Punto más caliente (hotspot)', ('{0} °C{1}' -f $g.GpuHotMax, $dl)))
+    }
+    if ($null -ne $g.GpuMemMax) { [void]$kv.Add(@('Temperatura de la memoria', ('{0} °C <span class="sub">(bajo carga de juego)</span>' -f $g.GpuMemMax))) }
+    # La temperatura del test de VRAM (carga extrema, tipo minería) queda solo en el reporte técnico:
+    # en el informe del cliente se muestra la del stress, que es la comparable con un juego.
+    # Si en el test de VRAM pasó el límite real (108 °C), igual aparece como observación.
+    if ($null -ne $g.GpuPowerMax) { [void]$kv.Add(@('Consumo máximo', ('{0} W' -f $g.GpuPowerMax))) }
+    if ($g.Enlace) { [void]$kv.Add(@('Conexión PCIe bajo carga', (HtmlEnc $g.Enlace))) }
+    if ($g.VsHist) { [void]$kv.Add(@('Rendimiento vs. placas iguales', ('{0:N0}% <span class="sub">({1} placas con el mismo chip)</span>' -f $g.VsHist.Pct, $g.VsHist.N))) }
+    if ($g.Reinicios) { [void]$kv.Add(@('Reinicios del driver', ([string]$g.Reinicios))) }
+    return $kv
+}
+
+function Export-Informe {
+    if (-not $Global:ReportFile) { return $null }
+    $base = [IO.Path]::ChangeExtension($Global:ReportFile, $null).TrimEnd('.')
+    $htmlPath = $base + '.html'
+    $jsonPath = $base + '.json'
+    $e = $Global:M.Equipo; $c = $Global:M.Cpu; $s = $Global:SesionSensores
+    $suelta = [bool]$Global:M.Suelta
+    $areasInf = @(Get-AreasInforme)
+    $worst = Get-ResultadoSesion
+    $vt = switch ($worst) {
+        'FALLA' { @('fail', 'Se detectaron fallas', $(if ($suelta) { 'La placa no superó las pruebas. El detalle está en las observaciones.' } else { 'Al menos un componente no superó las pruebas. El detalle está en las observaciones.' })) }
+        'ATENCION' { @('warn', 'Apto con observaciones', $(if ($suelta) { 'La placa superó las pruebas de funcionamiento; hay puntos a tener en cuenta, detallados abajo.' } else { 'El equipo superó las pruebas de funcionamiento; hay puntos a tener en cuenta, detallados abajo.' })) }
+        default { @('ok', 'Sin fallas detectadas', 'Todas las pruebas automáticas se completaron sin errores.') }
+    }
+    $fecha = $Global:M.Fecha
+    $dt = [datetime]::MinValue
+    if ([datetime]::TryParse([string]$Global:M.Fecha, [ref]$dt)) { $fecha = $dt.ToString('dd/MM/yyyy HH:mm') }
+    $logo = Get-LogoDataUri
+    $sb = New-Object System.Text.StringBuilder
+
+    $css = $InformeCss
     [void]$sb.Append('<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')
     [void]$sb.Append(('<title>Informe de diagnóstico {0}</title><style>{1}</style></head><body><div class="page">' -f (HtmlEnc $Global:M.Orden), $css))
 
@@ -3562,6 +3629,7 @@ footer { margin-top:26px; padding:16px 32px 22px; border-top:1px solid var(--lin
     $brand = if ($logo) { '<img src="' + $logo + '" alt="NET Gaming">' } else { '<div class="word">NET <span>GAMING</span></div>' }
     [void]$sb.Append('<header class="top"><div class="brand">' + $brand + '</div><div class="doc"><b>Informe de diagnóstico de hardware</b>')
     if ($Global:M.Orden) { [void]$sb.Append('<span class="orden">Orden ' + (HtmlEnc $Global:M.Orden) + '</span> &middot; ') }
+    if ($Global:M.Pieza) { [void]$sb.Append('<span class="orden">Placa S/N &hellip;' + (HtmlEnc $Global:M.Pieza) + '</span> &middot; ') }
     [void]$sb.Append((HtmlEnc $fecha))
     if ($Global:M.Tecnico) { [void]$sb.Append('<br>Técnico: ' + (HtmlEnc $Global:M.Tecnico)) }
     [void]$sb.Append('</div></header><main>')
@@ -3570,15 +3638,22 @@ footer { margin-top:26px; padding:16px 32px 22px; border-top:1px solid var(--lin
     $sym = switch ($vt[0]) { 'ok' { '&#10003;' } 'warn' { '!' } default { '&#10005;' } }
     [void]$sb.Append(('<section class="verdict {0}"><div class="dot">{1}</div><div><h1>{2}</h1><p>{3}</p></div></section>' -f $vt[0], $sym, $vt[1], $vt[2]))
 
-    # Equipo
-    [void]$sb.Append('<h2>Equipo</h2><table class="spec">')
-    $specRows = @(
+    # Equipo (o, si es una placa suelta, la placa: el procesador y la mother son los del banco y no van)
+    $gm = $Global:M.Gpu
+    $placaNombre = if ($gm.Modelo) { $gm.Modelo } elseif ($gm.NombreWindows) { $gm.NombreWindows } else { (@($e.GPU | Where-Object { $_ -match $DedicadaRegex }) + @($e.GPU) | Select-Object -First 1) }
+    [void]$sb.Append($(if ($suelta) { '<h2>Pieza probada</h2><table class="spec">' } else { '<h2>Equipo</h2><table class="spec">' }))
+    $specRows = if ($suelta) { @(
+        @('Placa de video', (HtmlEnc $placaNombre)),
+        @('Fabricante', (HtmlEnc $gm.Fabricante)),
+        @('N.º de serie', $(if ($Global:M.Pieza) { 'termina en <b class="pz">' + (HtmlEnc $Global:M.Pieza) + '</b>' })),
+        @('Probada en', 'Banco de pruebas de NET Gaming')
+    ) } else { @(
         @('Procesador', $(if ($Global:Cpu) { "{0} <span class=""sub"">({1} núcleos / {2} hilos)</span>" -f (HtmlEnc $Global:Cpu.Nombre), $Global:Cpu.Nucleos, $Global:Cpu.Hilos })),
         @('Motherboard', (HtmlEnc $e.Mother) + $(if ($e.BIOS) { ' <span class="sub">(BIOS ' + (HtmlEnc $e.BIOS) + ')</span>' })),
         @('Memoria RAM', (HtmlEnc $e.RamTexto)),
         @('Video', (HtmlEnc ($e.GPU -join ' + '))),
         @('Almacenamiento', (HtmlEnc ((@($Global:M.Discos | ForEach-Object { '{0} ({1})' -f $_.Modelo, $_.Capacidad })) -join ' + ')))
-    )
+    ) }
     foreach ($r in $specRows) { if ($r[1]) { [void]$sb.Append(('<tr><th>{0}</th><td>{1}</td></tr>' -f $r[0], $r[1])) } }
     [void]$sb.Append('</table>')
 
@@ -3586,7 +3661,7 @@ footer { margin-top:26px; padding:16px 32px 22px; border-top:1px solid var(--lin
     $areaNames = [ordered]@{ 'CPU' = 'Procesador'; 'RAM' = 'Memoria RAM'; 'Discos' = 'Almacenamiento'; 'Motherboard' = 'Motherboard'; 'GPU' = 'Video'; 'Fuente' = 'Fuente de alimentación'; 'Plataforma' = 'Sistema y drivers' }
     [void]$sb.Append('<h2>Resultados por componente</h2><div class="cards">')
     foreach ($area in $areaNames.Keys) {
-        if (-not $Global:Verdicts.Contains($area)) { continue }
+        if (-not $Global:Verdicts.Contains($area) -or $areasInf -notcontains $area) { continue }
         $v = $Global:Verdicts[$area]
         $si = Get-StateInfo $v.Estado
         $kv = New-Object System.Collections.ArrayList
@@ -3633,36 +3708,7 @@ footer { margin-top:26px; padding:16px 32px 22px; border-top:1px solid var(--lin
                 if ($s -and $null -ne $s.VrmMax) { [void]$kv.Add(@('VRM máximo', ('{0:N0} °C' -f $s.VrmMax))) }
                 if ($s -and $null -ne $s.V12Min) { [void]$kv.Add(@('+12 V bajo carga', ('{0:N2} V' -f $s.V12Min))) }
             }
-            'GPU' {
-                $g = $Global:M.Gpu
-                $modelo = if ($g.Modelo) { $g.Modelo } elseif ($g.VramDispositivo) { $g.VramDispositivo } else { ($e.GPU -join ' + ') }
-                if ($modelo) { [void]$kv.Add(@('Modelo', (HtmlEnc $modelo))) }
-                if ($null -ne $g.Coincide) {
-                    $var = if ($g.Variante) { ' · ' + $g.Variante } else { '' }
-                    $txtId = if ($g.Coincide) { 'Original: el chip {0} corresponde al modelo{1}' -f $g.Chip, $var } else { 'NO coincide: el chip real es {0}' -f $g.ChipNombre }
-                    [void]$kv.Add(@('Identidad de la placa', (HtmlEnc $txtId)))
-                }
-                if ($g.Fabricante) { [void]$kv.Add(@('Fabricante', (HtmlEnc $g.Fabricante))) }
-                if ($g.VramGB) { [void]$kv.Add(@('Memoria de video', ('{0} GB' -f $g.VramGB))) }
-                if ($g.Vbios) { [void]$kv.Add(@('BIOS de video', (HtmlEnc $g.Vbios))) }
-                if ($g.VramRes) { [void]$kv.Add(@('Memoria de video (VRAM)', ('{0} <span class="sub">(se verificó toda la memoria, {1:N0} min)</span>' -f (HtmlEnc $g.VramRes), $g.VramMin))) }
-                if ($null -ne $g.StressMin -and $g.StressMin -gt 0) {
-                    [void]$kv.Add(@('Stress con verificación', ('{0:N0} min, {1}' -f $g.StressMin, $(if ($g.StressErr) { "$($g.StressErr) errores" } else { 'sin errores' }))))
-                }
-                if ($null -ne $g.GpuTempMax) { [void]$kv.Add(@('Temperatura del núcleo', ('{0} °C <span class="sub">(la que muestran FurMark y GPU-Z)</span>' -f $g.GpuTempMax))) }
-                if ($null -ne $g.GpuHotMax -and -not (Test-Rtx50 $modelo)) {   # en RTX 50 no hay lectura oficial
-                    $dl = if ($null -ne $g.GpuDeltaMax) { ' <span class="sub">({0} °C sobre el núcleo)</span>' -f $g.GpuDeltaMax } else { '' }
-                    [void]$kv.Add(@('Punto más caliente (hotspot)', ('{0} °C{1}' -f $g.GpuHotMax, $dl)))
-                }
-                if ($null -ne $g.GpuMemMax) { [void]$kv.Add(@('Temperatura de la memoria', ('{0} °C <span class="sub">(bajo carga de juego)</span>' -f $g.GpuMemMax))) }
-                # La temperatura del test de VRAM (carga extrema, tipo minería) queda solo en el reporte técnico:
-                # en el informe del cliente se muestra la del stress, que es la comparable con un juego.
-                # Si en el test de VRAM pasó el límite real (108 °C), igual aparece como observación.
-                if ($null -ne $g.GpuPowerMax) { [void]$kv.Add(@('Consumo máximo', ('{0} W' -f $g.GpuPowerMax))) }
-                if ($g.Enlace) { [void]$kv.Add(@('Conexión PCIe bajo carga', (HtmlEnc $g.Enlace))) }
-                if ($g.VsHist) { [void]$kv.Add(@('Rendimiento vs. placas iguales', ('{0:N0}% <span class="sub">({1} placas con el mismo chip)</span>' -f $g.VsHist.Pct, $g.VsHist.N))) }
-                if ($g.Reinicios) { [void]$kv.Add(@('Reinicios del driver', ([string]$g.Reinicios))) }
-            }
+            'GPU' { foreach ($x in @(Get-GpuKv $Global:M.Gpu ($e.GPU -join ' + '))) { [void]$kv.Add($x) } }
         }
         $chart = if ($area -eq 'GPU') { Get-TempChartSvg $Global:M.Gpu['Serie'] } else { '' }
         [void]$sb.Append(('<div class="card{3}"><h3>{0}<span class="chip {1}">{2}</span></h3>' -f $areaNames[$area], $si.Cls, $si.Txt, $(if ($chart) { ' wide' } else { '' })))
@@ -3707,7 +3753,7 @@ footer { margin-top:26px; padding:16px 32px 22px; border-top:1px solid var(--lin
         $pdfPath = Join-Path $ReportDir ((Split-Path -Leaf $base) + '.pdf')   # el PDF queda a la vista en Reportes
         $Global:InformePdf = $null
         if (Convert-HtmlToPdf $htmlPath $pdfPath) { $Global:InformePdf = $pdfPath }
-        else { Log '  No se pudo generar el PDF (falta Edge/Chrome): queda el informe en HTML (Reportes\detalle), que se puede imprimir como PDF desde el navegador.' 'Yellow' }
+        else { Log ('  No se pudo generar el PDF ({0}): queda el informe en HTML (Reportes\detalle), que se puede imprimir como PDF desde el navegador.' -f $Global:PdfMotivo) 'Yellow' }
         $out = [ordered]@{}
         foreach ($k in $Global:M.Keys) { $out[$k] = $Global:M[$k] }
         $out['Sensores'] = $s
@@ -3716,11 +3762,130 @@ footer { margin-top:26px; padding:16px 32px 22px; border-top:1px solid var(--lin
         foreach ($k in $Global:Verdicts.Keys) { $out['Areas'][$k] = [ordered]@{ Estado = $Global:Verdicts[$k].Estado; Detalles = @($Global:Verdicts[$k].Detalles) } }
         $out['Pendientes'] = @($Global:Pendientes)
         [IO.File]::WriteAllText($jsonPath, ($out | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+        try { Export-InformeOrden } catch { Log ("  No se pudo armar el informe de la orden completa: {0}" -f $_.Exception.Message) 'Yellow' }
     } catch {
         Log ("  No se pudo guardar el informe HTML: {0}" -f $_.Exception.Message) 'Yellow'
         return $null
     }
     return $htmlPath
+}
+
+# ======================================================================
+#  Informe de la orden completa: cuando una orden trae varias placas, cada una se prueba por separado
+#  (hay que apagar para cambiarla) cargando la misma orden y el final de su número de serie. Con dos o más,
+#  además del informe de cada placa se arma UNO de la orden, con todas juntas y comparadas.
+# ======================================================================
+function Get-NombreArchivo([string]$Texto) { return ($Texto -replace '[\\/:*?"<>|]', '' -replace '\s+', '-') }
+
+function Get-FechaSesion($J) {
+    if ($J.Fecha -is [datetime]) { return $J.Fecha }
+    $d = [datetime]::MinValue
+    [void][datetime]::TryParse([string]$J.Fecha, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$d)
+    return $d
+}
+
+# Los informes guardados (.json) de esa orden que tienen pieza. Si una placa se probó más de una vez, vale la última.
+function Get-SesionesOrden([string]$Orden) {
+    $ses = @{}
+    $pat = '*_' + (Get-NombreArchivo $Orden) + '_SN*.json'
+    foreach ($f in @(Get-ChildItem -Path (Join-Path $ReportDir 'detalle') -Filter $pat -File -ErrorAction SilentlyContinue)) {
+        $j = $null
+        try { $j = [IO.File]::ReadAllText($f.FullName, [Text.Encoding]::UTF8) | ConvertFrom-Json } catch { continue }
+        if (-not $j -or -not $j.Pieza -or [string]$j.Orden -ne $Orden) { continue }
+        $k = ([string]$j.Pieza).ToUpper()
+        if (-not $ses.ContainsKey($k) -or (Get-FechaSesion $j) -gt (Get-FechaSesion $ses[$k])) { $ses[$k] = $j }
+    }
+    return @($ses.Values | Sort-Object { (Get-FechaSesion $_).Ticks })
+}
+
+function Export-InformeOrden {
+    $Global:InformeOrdenPdf = $null
+    $Global:InformeOrdenHtml = $null
+    $orden = [string]$Global:M.Orden
+    if (-not $orden -or -not $Global:M.Pieza) { return }
+    $ses = @(Get-SesionesOrden $orden)
+    if ($ses.Count -lt 2) { return }
+    $n = $ses.Count
+    $nF = @($ses | Where-Object { [string]$_.Resultado -eq 'FALLA' }).Count
+    $nA = @($ses | Where-Object { [string]$_.Resultado -eq 'ATENCION' }).Count
+    $nOk = $n - $nF - $nA
+    $vt = if ($nF) { @('fail', ('{0} de {1} placas con fallas' -f $nF, $n), 'Abajo está el detalle de cada placa, identificada por el final de su número de serie.') }
+    elseif ($nA) { @('warn', ('{0} de {1} placas con observaciones' -f $nA, $n), ('Las {0} placas superaron las pruebas de funcionamiento: {1} sin observaciones y {2} con puntos a tener en cuenta, detallados abajo.' -f $n, $nOk, $nA)) }
+    else { @('ok', ('Las {0} placas sin fallas' -f $n), 'Todas completaron las pruebas automáticas sin errores.') }
+    $sym = switch ($vt[0]) { 'ok' { '&#10003;' } 'warn' { '!' } default { '&#10005;' } }
+    $logo = Get-LogoDataUri
+    $corto = { param($t) ([string]$t) -replace '^(NVIDIA GeForce|AMD Radeon|NVIDIA|AMD)\s+', '' }
+    $modeloDe = { param($j) $g = $j.Gpu; if ($g.Modelo) { [string]$g.Modelo } elseif ($g.NombreWindows) { [string]$g.NombreWindows } else { [string](@($j.Equipo.GPU) | Select-Object -Last 1) } }
+    $val = { param($v, $u) if ($null -eq $v -or [string]$v -eq '') { '-' } else { ('{0:N0}{1}' -f [double]$v, $u) } }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')
+    [void]$sb.Append(('<title>Informe de la orden {0}</title><style>{1}</style></head><body><div class="page">' -f (HtmlEnc $orden), $InformeCss))
+    $brand = if ($logo) { '<img src="' + $logo + '" alt="NET Gaming">' } else { '<div class="word">NET <span>GAMING</span></div>' }
+    [void]$sb.Append('<header class="top"><div class="brand">' + $brand + '</div><div class="doc"><b>Informe de diagnóstico de hardware</b>')
+    [void]$sb.Append('<span class="orden">Orden ' + (HtmlEnc $orden) + '</span> &middot; ' + $n + ' placas de video &middot; ' + (Get-Date -Format 'dd/MM/yyyy'))
+    $tecs = @($ses | ForEach-Object { [string]$_.Tecnico } | Where-Object { $_ } | Select-Object -Unique)
+    if ($tecs.Count) { [void]$sb.Append('<br>Técnico: ' + (HtmlEnc ($tecs -join ', '))) }
+    [void]$sb.Append('</div></header><main>')
+    [void]$sb.Append(('<section class="verdict {0}"><div class="dot">{1}</div><div><h1>{2}</h1><p>{3}</p></div></section>' -f $vt[0], $sym, $vt[1], $vt[2]))
+
+    # Comparación: una fila por placa. En naranja, la que más temperatura levantó (si la diferencia entre placas es de 5 °C o más)
+    $maxDe = { param($campo) $v = @($ses | ForEach-Object { $_.Gpu.$campo } | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ }); if ($v.Count -ge 2 -and (($v | Measure-Object -Maximum).Maximum - ($v | Measure-Object -Minimum).Minimum) -ge 5) { ($v | Measure-Object -Maximum).Maximum } else { $null } }
+    $mxT = & $maxDe 'GpuTempMax'; $mxH = & $maxDe 'GpuHotMax'; $mxM = & $maxDe 'GpuMemMax'
+    $celda = { param($v, $mx, $u) $t = & $val $v $u; if ($null -ne $mx -and $null -ne $v -and [double]$v -ge $mx) { '<td class="hi">' + $t + '</td>' } else { '<td>' + $t + '</td>' } }
+    # las columnas sin ningún dato (placas sin sensor de memoria o de consumo) no se muestran
+    $hayCol = { param($campo) [bool](@($ses | Where-Object { $null -ne $_.Gpu.$campo -and -not ($campo -eq 'GpuHotMax' -and (Test-Rtx50 (& $modeloDe $_))) }).Count) }
+    $cH = & $hayCol 'GpuHotMax'; $cM = & $hayCol 'GpuMemMax'; $cP = & $hayCol 'GpuPowerMax'
+    [void]$sb.Append('<h2>Comparación de las placas</h2><table class="sum"><tr><th>N.º de serie</th><th>Modelo</th><th>Núcleo</th>' + $(if ($cH) { '<th>Hotspot</th>' }) + $(if ($cM) { '<th>Memoria</th>' }) + $(if ($cP) { '<th>Consumo</th>' }) + '<th>VRAM</th><th>Stress</th><th>Resultado</th></tr>')
+    foreach ($j in $ses) {
+        $g = $j.Gpu
+        $modelo = & $modeloDe $j
+        $si = Get-StateInfo ([string]$j.Resultado)
+        $hot = if (Test-Rtx50 $modelo) { $null } else { $g.GpuHotMax }
+        $stress = if ($null -ne $g.StressMin -and [double]$g.StressMin -gt 0) { ('{0:N0} min, {1}' -f [double]$g.StressMin, $(if ($g.StressErr) { "$($g.StressErr) errores" } else { 'sin errores' })) } else { '-' }
+        [void]$sb.Append('<tr><td class="n">&hellip;' + (HtmlEnc $j.Pieza) + '</td><td>' + (HtmlEnc (& $corto $modelo)) + '</td>')
+        [void]$sb.Append((& $celda $g.GpuTempMax $mxT ' °C') + $(if ($cH) { & $celda $hot $mxH ' °C' }) + $(if ($cM) { & $celda $g.GpuMemMax $mxM ' °C' }) + $(if ($cP) { '<td>' + (& $val $g.GpuPowerMax ' W') + '</td>' }))
+        [void]$sb.Append('<td>' + (HtmlEnc $(if ($g.VramRes) { $g.VramRes } else { '-' })) + '</td><td>' + (HtmlEnc $stress) + '</td>')
+        [void]$sb.Append(('<td><span class="chip {0}">{1}</span></td></tr>' -f $si.Cls, $si.Txt))
+    }
+    [void]$sb.Append('</table><p class="nota">Temperaturas máximas durante el stress de cada placa, en el mismo banco de pruebas. Núcleo: la que muestran FurMark y GPU-Z.</p>')
+
+    # Detalle: una tarjeta por placa
+    [void]$sb.Append('<h2>Detalle por placa</h2><div class="cards">')
+    foreach ($j in $ses) {
+        $g = $j.Gpu
+        $modelo = & $modeloDe $j
+        $si = Get-StateInfo ([string]$j.Resultado)
+        [void]$sb.Append(('<div class="card wide"><h3><span>Placa <span class="pz">&hellip;{0}</span> &middot; {1}</span><span class="chip {2}">{3}</span></h3>' -f (HtmlEnc $j.Pieza), (HtmlEnc (& $corto $modelo)), $si.Cls, $si.Txt))
+        $kv = @(Get-GpuKv $g $modelo | Where-Object { $_[0] -ne 'Modelo' })
+        if ($kv.Count) {
+            [void]$sb.Append('<dl class="kv">')
+            foreach ($x in $kv) { [void]$sb.Append(('<dt>{0}</dt><dd>{1}</dd>' -f $x[0], $x[1])) }
+            [void]$sb.Append('</dl>')
+        }
+        [void]$sb.Append((Get-TempChartSvg $g.Serie))
+        $obs = @(@($j.Areas.GPU.Detalles) | Where-Object { $_ -match '^\[(ATENCION|FALLA)\]' })
+        if ($obs.Count) {
+            [void]$sb.Append('<ul class="obs">')
+            foreach ($o in $obs) { [void]$sb.Append(('<li class="{0}">{1}</li>' -f $(if ($o -match '^\[FALLA\]') { 'fail' } else { 'warn' }), (HtmlEnc ($o -replace '^\[\w+\]\s*', '')))) }
+            [void]$sb.Append('</ul>')
+        }
+        $f = Get-FechaSesion $j
+        [void]$sb.Append(('<p class="nota">Probada el {0} &middot; ID {1}</p></div>' -f $f.ToString('dd/MM/yyyy HH:mm'), (HtmlEnc $j.Sesion)))
+    }
+    [void]$sb.Append('</div></main><footer><div><b class="grad-text">NET Gaming</b> &middot; netgaming.ar</div>')
+    [void]$sb.Append(('<div>Resultados válidos al momento del diagnóstico &middot; NET-TestBench v{0}</div></footer></div></body></html>' -f $Version))
+
+    $nom = (Get-NombreArchivo $orden) + '_resumen'
+    $htmlPath = Join-Path (Join-Path $ReportDir 'detalle') ($nom + '.html')
+    $pdfPath = Join-Path $ReportDir ($nom + '.pdf')
+    [IO.File]::WriteAllText($htmlPath, $sb.ToString(), (New-Object System.Text.UTF8Encoding($true)))
+    $Global:InformeOrdenHtml = $htmlPath
+    if (Convert-HtmlToPdf $htmlPath $pdfPath) {
+        $Global:InformeOrdenPdf = $pdfPath
+        Log ("Informe de la orden completa ({0} placas, una al lado de la otra): {1}" -f $n, $pdfPath) 'White'
+    } else {
+        Log ("  Informe de la orden completa ({0} placas): no se pudo pasar a PDF ({1}); queda en {2}" -f $n, $Global:PdfMotivo, $htmlPath) 'Yellow'
+    }
 }
 
 # ======================================================================
@@ -3792,7 +3957,10 @@ $GpuStressHtml = @'
   var q = new URLSearchParams(location.search);
   var DURATION = Math.max(10, (parseFloat(q.get("min")) || 10) * 60) * 1000;
   var SIMERR = q.get("simerr") === "1";          // solo para probar la detección
-  var CHECK_EVERY = 3000, CHECK_SIZE = 256, CHECK_LAYERS = 48, MAX_PASSES = 400, NOISE = 2048;
+  // MAX_PASSES alto: con 400 las placas de gama alta (4070 Ti para arriba) no llegaban al 100%.
+  // LOTE: las capas se dibujan de a tandas en una sola orden (instancias), así el procesador del banco no limita a la placa.
+  var CHECK_EVERY = 3000, CHECK_SIZE = 256, CHECK_LAYERS = 48, MAX_PASSES = 8000, LOTE = 64, NOISE = 2048;
+  var FPS_ALTO = 45, FPS_BAJO = 22;   // más capas mientras pase de 45 cuadros/s; menos si baja de 22
 
   var t0 = performance.now(), scoreSum = 0, scoreN = 0;
   var st = { score: 0, state: "starting", elapsed: 0, duration: DURATION / 1000, fps: 0, passes: 1, checks: 0, errors: 0,
@@ -3820,14 +3988,15 @@ $GpuStressHtml = @'
     finish("La GPU dejó de responder y el driver se reinició (contexto perdido).");
   });
 
-  var VS = "#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }";
+  var VS = "#version 300 es\nin vec2 p; uniform float base; flat out float layer; void main(){ layer = base + float(gl_InstanceID); gl_Position = vec4(p, 0.0, 1.0); }";
   // Carga tipo FurMark / juego: capas de "pelo" semitransparentes una arriba de otra. Usa a la vez
   // texturas (con caché y memoria), cálculo de iluminación y mezcla de colores (ROPs), así el calor se
   // reparte por el chip como en un juego exigente y no se concentra solo en los núcleos de cálculo.
   var FS = [
     "#version 300 es",
     "precision highp float;",
-    "uniform vec2 res; uniform float t; uniform float layer; uniform float nl; uniform sampler2D noise;",
+    "uniform vec2 res; uniform float t; uniform float nl; uniform sampler2D noise;",
+    "flat in float layer;",
     "out vec4 o;",
     "void main(){",
     "  vec2 uv = gl_FragCoord.xy / res.y;",
@@ -3872,7 +4041,7 @@ $GpuStressHtml = @'
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-  var U = {}; ["res", "t", "layer", "nl", "noise"].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+  var U = {}; ["res", "t", "base", "nl", "noise"].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
 
   // Textura de ruido fija (siempre la misma, para que la verificación sea reproducible), con mipmaps
   var noiseTex = (function () {
@@ -3919,7 +4088,7 @@ $GpuStressHtml = @'
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, noiseTex);
     gl.uniform1i(U.noise, 0); gl.uniform2f(U.res, w, h); gl.uniform1f(U.t, t); gl.uniform1f(U.nl, capas);
     gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    for (var i = 0; i < capas; i++) { gl.uniform1f(U.layer, i); gl.drawArrays(gl.TRIANGLES, 0, 3); }
+    for (var i = 0; i < capas; i += LOTE) { gl.uniform1f(U.base, i); gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, Math.min(LOTE, capas - i)); }
     gl.disable(gl.BLEND);
   }
 
@@ -3949,19 +4118,32 @@ $GpuStressHtml = @'
 
   t0 = performance.now(); var lastCheck = t0, lastSec = t0, frames = 0, passes = 8, running = true;
   st.state = "running";
-  function frame(now) {
+  // Cuadros en vuelo: se manda un cuadro nuevo solo cuando la GPU terminó alguno de los anteriores (hasta 2 en cola).
+  // Así la placa nunca se queda esperando al monitor ni al procesador, y los cuadros/s son los que realmente dibujó.
+  var pend = [];
+  function gpuLibre(now) {
+    while (pend.length && (gl.getSyncParameter(pend[0].s, gl.SYNC_STATUS) === gl.SIGNALED || now - pend[0].t > 3000)) gl.deleteSync(pend.shift().s);
+    return pend.length < 2;
+  }
+  function frame() {
     if (!running) return;
+    var now = performance.now();   // el reloj real: sin tope de cuadros, la hora que pasa el navegador a esta función no es confiable
     if (gl.isContextLost()) return;
-    resize();
-    drawFur(null, W, H, (now - t0) / 1000, passes);
-    frames++;
-
-    if (now - lastCheck >= CHECK_EVERY) { lastCheck = now; check(); }
+    var dibujo = gpuLibre(now);
+    if (dibujo) {
+      resize();
+      drawFur(null, W, H, (now - t0) / 1000, passes);
+      var sy = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      gl.flush();
+      if (sy) pend.push({ s: sy, t: now });
+      frames++;
+      if (now - lastCheck >= CHECK_EVERY) { lastCheck = now; check(); }
+    }
     if (now - lastSec >= 1000) {
       var fps = frames * 1000 / (now - lastSec); frames = 0; lastSec = now;
-      // carga adaptativa: más capas hasta que la GPU no llegue a los 60 cuadros (= GPU al 100%)
-      if (fps > 52 && passes < MAX_PASSES) passes = Math.min(MAX_PASSES, Math.ceil(passes * 1.25) + 1);
-      else if (fps < 35 && passes > 1) passes = Math.max(1, Math.floor(passes * 0.8));
+      // carga adaptativa: más capas hasta que la GPU no pueda pasar de 45 cuadros/s (= GPU al 100%)
+      if (fps > FPS_ALTO && passes < MAX_PASSES) passes = Math.min(MAX_PASSES, Math.ceil(passes * (fps > FPS_ALTO * 2 ? 1.6 : 1.25)) + 1);
+      else if (fps < FPS_BAJO && passes > 1) passes = Math.max(1, Math.floor(passes * 0.8));
       st.fps = Math.round(fps * 10) / 10; st.passes = passes; st.elapsed = Math.round((now - t0) / 1000);
       if (now - t0 > Math.min(30000, DURATION * 0.3)) {      // puntaje: recién cuando la carga se estabilizó
         scoreSum += fps * passes * W * H / 1e6; scoreN++;
@@ -3970,7 +4152,8 @@ $GpuStressHtml = @'
       ui(); post("/status");
     }
     if (now - t0 >= DURATION) { finish(null); return; }
-    requestAnimationFrame(frame);
+    // si la GPU todavía está ocupada se espera un instante, sin dejar al procesador girando en vacío
+    if (dibujo) requestAnimationFrame(frame); else setTimeout(frame, 2);
   }
   function fmt(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2); }
   function ui() {
@@ -4087,18 +4270,57 @@ function Find-Browser {
     return $null
 }
 
-function Get-GpuLinks {
+function Get-PciLinkProps([string]$Id) {
     $keys = 'DEVPKEY_PciDevice_CurrentLinkSpeed', 'DEVPKEY_PciDevice_MaxLinkSpeed', 'DEVPKEY_PciDevice_CurrentLinkWidth', 'DEVPKEY_PciDevice_MaxLinkWidth'
+    $h = @{}
+    foreach ($x in @(Get-PnpDeviceProperty -InstanceId $Id -KeyName $keys -ErrorAction SilentlyContinue)) { $h[$x.KeyName] = $x.Data }
+    if (-not $h['DEVPKEY_PciDevice_MaxLinkWidth']) { return $null }
+    return @{
+        Cw = [int]$h['DEVPKEY_PciDevice_CurrentLinkWidth']; Mw = [int]$h['DEVPKEY_PciDevice_MaxLinkWidth']
+        Cs = [int]$h['DEVPKEY_PciDevice_CurrentLinkSpeed']; Ms = [int]$h['DEVPKEY_PciDevice_MaxLinkSpeed']
+    }
+}
+
+# Enlace en este momento según el driver de NVIDIA (Windows a veces deja guardado el del arranque, en reposo)
+function Get-NvidiaLink([string]$Dev) {
+    $smi = Get-NvidiaSmi
+    if (-not $smi -or -not $Dev) { return $null }
+    try {
+        $out = & $smi '--query-gpu=pci.device_id,pcie.link.gen.current,pcie.link.width.current' '--format=csv,noheader,nounits' 2>$null
+        foreach ($l in @($out)) {
+            $v = @([string]$l -split ',\s*')
+            if ($v.Count -lt 3 -or $v[0] -notmatch $Dev) { continue }
+            $g = 0; $w = 0
+            if ([int]::TryParse($v[1].Trim(), [ref]$g) -and [int]::TryParse($v[2].Trim(), [ref]$w) -and $g -ge 1 -and $g -le 6 -and $w -ge 1) { return @{ Cs = $g; Cw = $w } }
+        }
+    } catch {}
+    return $null
+}
+
+function Get-GpuLinks {
     $out = @()
     foreach ($d in @(Get-PnpDevice -PresentOnly -Class Display -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'PCI\*' })) {
-        $h = @{}
-        foreach ($x in @(Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName $keys -ErrorAction SilentlyContinue)) { $h[$x.KeyName] = $x.Data }
-        if (-not $h['DEVPKEY_PciDevice_MaxLinkWidth']) { continue }
-        $out += [pscustomobject]@{
-            Nombre = Get-Clean $d.FriendlyName
-            Cw = [int]$h['DEVPKEY_PciDevice_CurrentLinkWidth']; Mw = [int]$h['DEVPKEY_PciDevice_MaxLinkWidth']
-            Cs = [int]$h['DEVPKEY_PciDevice_CurrentLinkSpeed']; Ms = [int]$h['DEVPKEY_PciDevice_MaxLinkSpeed']
+        $id = [string]$d.InstanceId
+        $l = Get-PciLinkProps $id
+        if (-not $l) { continue }
+        $fuente = 'Windows'
+        if ($id -match '^PCI\\VEN_1002') {
+            # Radeon RX 5000 en adelante: el chip cuelga de un puente que trae la propia placa, y su enlace con ese puente
+            # siempre figura al máximo (x16 Gen4/Gen5). El enlace real con la mother es el del puente de más arriba.
+            $cur = $id
+            for ($n = 0; $n -lt 3; $n++) {
+                $par = $null
+                try { $par = [string](Get-PnpDeviceProperty -InstanceId $cur -KeyName 'DEVPKEY_Device_Parent' -ErrorAction Stop).Data } catch {}
+                if (-not $par -or $par -notmatch '^PCI\\VEN_1002') { break }
+                $pl = Get-PciLinkProps $par
+                if ($pl) { $l = $pl; $fuente = 'puente de la placa' }
+                $cur = $par
+            }
+        } elseif ($id -match '^PCI\\VEN_10DE&DEV_([0-9A-F]{4})') {
+            $nl = Get-NvidiaLink $Matches[1]
+            if ($nl) { $l.Cs = $nl.Cs; $l.Cw = $nl.Cw; $fuente = 'driver NVIDIA' }
         }
+        $out += [pscustomobject]@{ Nombre = Get-Clean $d.FriendlyName; Cw = $l.Cw; Mw = $l.Mw; Cs = $l.Cs; Ms = $l.Ms; Fuente = $fuente }
     }
     return $out
 }
@@ -4323,7 +4545,8 @@ function Invoke-GpuStress([int]$Minutes) {
     $url = "http://127.0.0.1:$port/?min=$Minutes"
     $bargs = @("--user-data-dir=`"$prof`"", '--no-first-run', '--no-default-browser-check', '--start-fullscreen', '--new-window',
         '--force_high_performance_gpu', '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-        '--disable-backgrounding-occluded-windows', '--autoplay-policy=no-user-gesture-required', $url)
+        '--disable-backgrounding-occluded-windows', '--autoplay-policy=no-user-gesture-required',
+        '--disable-gpu-vsync', '--disable-frame-rate-limit', $url)   # sin tope de cuadros: la GPU trabaja al 100% y no espera al monitor
     Set-Marker ("Stress de GPU ({0} min)" -f $Minutes)
     $t0 = Get-Date
     $bp = $null
@@ -4411,7 +4634,7 @@ function Invoke-GpuStress([int]$Minutes) {
     }
     if ($links) {
         foreach ($l in $links) {
-            Log ("Enlace PCIe bajo carga: {0} x{1}/x{2} {3}/{4}" -f $l.Nombre, $l.Cw, $l.Mw, (Get-PcieGen $l.Cs), (Get-PcieGen $l.Ms))
+            Log ("Enlace PCIe bajo carga: {0} x{1}/x{2} {3}/{4} (leído de: {5})" -f $l.Nombre, $l.Cw, $l.Mw, (Get-PcieGen $l.Cs), (Get-PcieGen $l.Ms), $l.Fuente)
             if ($l.Nombre -match $IntegradaRegex) { continue }
             $Global:M.Gpu['Enlace'] = ("x{0} {1}" -f $l.Cw, (Get-PcieGen $l.Cs))
             $apu8000 = $Global:Cpu -and $Global:Cpu.Nombre -match 'Ryzen \d 8\d{3}G'
@@ -4438,7 +4661,7 @@ function Invoke-GpuStress([int]$Minutes) {
     if ($st -and $completo -and -not $stopped -and $st.score -and -not $st.aborted -and -not $st.error -and $st.renderer -notmatch 'SwiftShader|llvmpipe|Basic Render') {
         $Global:M.Gpu['Score'] = [int]$st.score
         Log ("  Puntaje del stress: {0:N0} (trabajo por segundo, independiente de la resolución)" -f $st.score)
-        $cmp = Show-ComparacionGpu 'GpuPuntaje' ([double]$st.score) 'Rendimiento de la GPU'
+        $cmp = Show-ComparacionGpu 'GpuPuntaje2' ([double]$st.score) 'Rendimiento de la GPU'
         if ($cmp) { $Global:M.Gpu['VsHist'] = @{ Pct = [math]::Round($cmp.Pct); N = $cmp.N } }
     }
     $Global:M.Gpu['Reinicios'] = $resets.Count
@@ -4476,7 +4699,7 @@ function Invoke-PruebaFuente([int]$Minutes = 10) {
     $url = "http://127.0.0.1:$port/?min=$Minutes"
     $bargs = @("--user-data-dir=`"$prof`"", '--no-first-run', '--no-default-browser-check', '--start-fullscreen', '--new-window',
         '--force_high_performance_gpu', '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-        '--disable-backgrounding-occluded-windows', $url)
+        '--disable-backgrounding-occluded-windows', '--disable-gpu-vsync', '--disable-frame-rate-limit', $url)
     $bp = $null
     try { $bp = Start-Process -FilePath $browser -ArgumentList $bargs -PassThru } catch { Log ("  No se pudo abrir el navegador: {0}" -f $_.Exception.Message) 'Yellow' }
     $cpuArrancado = $false; $st = $null; $stopped = $false; $corte = ''; $resets = @(); $whea = 0
@@ -4730,6 +4953,8 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
 .pref span.sinpre { opacity:.3; text-decoration:line-through; }
 .pref input { flex:1; border-radius:0 8px 8px 0; font-size:18px; font-weight:700; letter-spacing:.04em; }
 .field .hint { font-size:12px; color:var(--muted); }
+.field label.chk { display:flex; align-items:center; gap:8px; font-size:13.5px; color:#d1d5db; cursor:pointer; }
+.field label.chk input { width:16px; height:16px; padding:0; }
 .check { display:grid; gap:6px; font-size:13px; color:#d1d5db; margin:0; padding-left:18px; }
 
 /* Ventanas */
@@ -4851,6 +5076,8 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
     var h = "";
     if (S.started) {
       h += '<span class="orden">Orden <b>' + esc(S.orden || "-") + "</b></span>";
+      if (S.pieza) h += '<span class="orden">Placa S/N <b>…' + esc(S.pieza) + "</b></span>";
+      else if (S.suelta) h += "<span>Placa suelta</span>";
       h += "<span>Técnico <b>" + esc(S.tecnico || "-") + "</b></span>";
       h += '<button class="hbtn" id="bNuevo">Nuevo equipo <kbd>N</kbd></button>';
     }
@@ -4881,8 +5108,11 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
       (faltan.length ? '<div class="banner warn">Faltan herramientas: ' + esc(faltan.map(function (t) { return t.nombre; }).join(", ")) + '. <button class="act" id="sDl">Descargar</button></div>' : "") +
       (S.prefijo
         ? '<div class="field"><label>Número de orden</label><div class="pref"><span id="fPre">' + esc(S.prefijo) + '</span><input id="fOrden" type="text" inputmode="numeric" autocomplete="off" placeholder="23100" autofocus></div>' +
-          '<div class="hint">Solo los números: queda ' + esc(S.prefijo) + '23100. Si escribís letras (ej. "PC mostrador"), se usa tal cual, sin el ' + esc(S.prefijo) + '</div></div>'
+          '<div class="hint">Solo los números: queda ' + esc(S.prefijo) + '23100. Si escribís letras o un número corto (ej. "PC mostrador", "4060"), se usa tal cual, sin el ' + esc(S.prefijo) + '</div></div>'
         : '<div class="field"><label>Orden o etiqueta del equipo</label><input id="fOrden" type="text" placeholder="Ej: NG-23100" autofocus></div>') +
+      '<div class="field"><label class="chk"><input type="checkbox" id="fSuelta"' + (S.banco ? " checked" : "") + '> Es una placa de video suelta (esta PC es el banco de pruebas)</label>' +
+      '<div id="fPiezaBox"' + (S.banco ? "" : ' style="display:none"') + '><input id="fPieza" type="text" maxlength="12" style="width:100%;margin-top:6px" autocomplete="off" placeholder="Final del N.º de serie de la placa (ej. 4826)">' +
+      '<div class="hint">Opcional. Si la orden trae varias placas, cargá la misma orden y el final del S/N de cada una: además del informe de cada placa sale uno solo de la orden, con todas comparadas.</div></div></div>' +
       '<div class="field"><label>Técnico</label>' + tecField + "</div>" +
       '<div class="field"><label>Antes de empezar</label><ul class="check"><li>Drivers de chipset y de video instalados (si faltan, el paso D los busca e instala solo).</li>' +
       "<li>BIOS en valores por defecto (sin PBO, undervolt ni OC) y XMP/EXPO apagado para la primera pasada.</li>" +
@@ -4890,13 +5120,15 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
       '<button class="big" id="sGo">Empezar <kbd>Enter</kbd></button></div>';
     $("sGo").onclick = start;
     if ($("sDl")) $("sDl").onclick = function () { cmd({ cmd: "tools", what: "download" }); };
+    $("fSuelta").onchange = function () { $("fPiezaBox").style.display = $("fSuelta").checked ? "" : "none"; };
     setTimeout(function () { if ($("fOrden")) $("fOrden").focus(); }, 50);
     if ($("fPre")) {
       var pf = S.prefijo.replace(/[^A-Za-z]/g, "");
       $("fOrden").oninput = function () {
         var v = $("fOrden").value.trim();
         // el prefijo se tacha cuando lo que se escribe no es un número (se va a usar tal cual)
-        var conPrefijo = !v || /^\d+$/.test(v) || (pf && new RegExp("^" + pf + "[\\s\\-_#]*\\d+$", "i").test(v));
+        var minDig = S.prefijoMin || 5;
+        var conPrefijo = !v || (/^\d+$/.test(v) && v.length >= minDig) || (pf && new RegExp("^" + pf + "[\\s\\-_#]*\\d+$", "i").test(v));
         $("fPre").className = conPrefijo ? "" : "sinpre";
       };
     }
@@ -4904,7 +5136,8 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
   function start() {
     var o = $("fOrden").value.trim(), t = $("fTec").value.trim();
     if (t && (S.tecnicos || []).indexOf(t) < 0) cmd({ cmd: "tecnico", nombre: t });
-    cmd({ cmd: "start", orden: o, tecnico: t });
+    var su = $("fSuelta").checked;
+    cmd({ cmd: "start", orden: o, tecnico: t, suelta: su, pieza: su ? $("fPieza").value.trim() : "" });
     $("sGo").disabled = true; $("sGo").textContent = "Preparando...";
   }
 
@@ -4994,6 +5227,7 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
     var dis = S._busy || !S.pruebas ? " disabled" : "";
     h += '<div class="actions"><button class="act" id="bInf"' + dis + ">Generar y abrir informe <kbd>I</kbd></button>" +
       '<button class="act" id="bOpenInf"' + (S.informe ? "" : " disabled") + ">Abrir informe</button>" +
+      (S.informeOrden ? '<button class="act pri2" id="bOrden">Informe de la orden (todas las placas)</button>' : "") +
       '<button class="act" id="bTxt"' + (S.reporte ? "" : " disabled") + ">Reporte técnico</button>" +
       '<button class="act" id="bDir">Carpeta de reportes</button></div>';
     // ---- enviar el informe a otras PCs (NET-Receptor)
@@ -5019,6 +5253,7 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
     });
     $("bInf").onclick = informe; $("bOpenInf").onclick = function () { cmd({ cmd: "abrir", what: "informe" }); };
     $("bTxt").onclick = function () { cmd({ cmd: "abrir", what: "txt" }); };
+    if ($("bOrden")) $("bOrden").onclick = function () { cmd({ cmd: "abrir", what: "orden" }); };
     $("bDir").onclick = function () { cmd({ cmd: "abrir", what: "carpeta" }); };
   }
 
@@ -5045,7 +5280,7 @@ input[type=checkbox] { accent-color:var(--rosa); width:15px; height:15px; }
       $("mainView").style.display = "none"; $("startView").style.display = "grid"; renderStart();
     } else {
       $("startView").style.display = "none"; $("startView").dataset.ready = ""; $("mainView").style.display = "grid";
-      var key = JSON.stringify([S.steps, S._busy, S.areas, S.informe, S.pruebas, S.reporte, S.dedicada, S.cpu, S.receptores, S.envio, S.envioClave]);
+      var key = JSON.stringify([S.steps, S._busy, S.areas, S.informe, S.pruebas, S.reporte, S.dedicada, S.cpu, S.receptores, S.envio, S.envioClave, S.informeOrden]);
       if (key !== lastRender) { lastRender = key; renderLeft(); renderResults(); }
       renderNow();
     }
@@ -5230,6 +5465,11 @@ function Get-UiSnapshot {
         tecnicos   = @(Get-Tecnicos)
         previa     = $Global:SesionCortada
         prefijo    = (Get-PrefijoOrden)
+        prefijoMin = (Get-OrdenMinDigitos)
+        pieza      = $Global:M.Pieza
+        suelta     = [bool]$Global:M.Suelta
+        banco      = (Get-EsBanco)
+        informeOrden = [bool]($Global:InformeOrdenPdf -and (Test-Path $Global:InformeOrdenPdf))
         cpu        = $(if ($Global:Cpu) { [ordered]@{ nombre = $Global:Cpu.Nombre; nucleos = $Global:Cpu.Nucleos; hilos = $Global:Cpu.Hilos } } else { $null })
         equipo     = [ordered]@{ mother = $e.Mother; bios = $e.BIOS; ram = $e.RamTexto; gpu = (@($e.GPU) -join ' + '); discos = (@($Global:M.Discos | ForEach-Object { '{0} ({1})' -f $_.Modelo, $_.Capacidad }) -join ' + ') }
         dedicada   = $hayDedicada
@@ -5256,21 +5496,62 @@ function Get-PrefijoOrden {
     return [string]$p
 }
 
+function Get-OrdenMinDigitos {
+    $n = 0
+    if ([int]::TryParse([string](Get-ConfigBanco)['orden_min_digitos'], [ref]$n) -and $n -ge 1) { return $n }
+    return 5
+}
+
+# Banco de pruebas de placas: se recuerda por PC (nombre de Windows) para que la opción "placa suelta" ya venga marcada
+function Get-EsBanco {
+    try { return [bool](@(Get-Content -Path (Join-Path $ReportDir '.bancos') -ErrorAction Stop | Where-Object { $_.Trim() -eq $env:COMPUTERNAME }).Count) } catch { return $false }
+}
+
+function Set-EsBanco([bool]$Si) {
+    try {
+        $f = Join-Path $ReportDir '.bancos'
+        New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
+        $l = @(Get-Content -Path $f -ErrorAction SilentlyContinue | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne $env:COMPUTERNAME })
+        if ($Si) { $l += $env:COMPUTERNAME }
+        [IO.File]::WriteAllLines($f, [string[]]$l)
+    } catch {}
+}
+
+function Format-Pieza([string]$Pieza) {
+    $p = (([string]$Pieza) -replace '[^A-Za-z0-9\-]', '').ToUpper()
+    if ($p.Length -gt 12) { $p = $p.Substring($p.Length - 12) }
+    return $p
+}
+
+# En una placa suelta el resultado es el de la placa: lo que diga el chequeo sobre el banco no cuenta
+function Get-AreasInforme {
+    if ($Global:M.Suelta) { return @($Global:Verdicts.Keys | Where-Object { $_ -eq 'GPU' }) }
+    return @($Global:Verdicts.Keys)
+}
+
+function Get-ResultadoSesion {
+    return (Get-WorstState @(Get-AreasInforme | ForEach-Object { $Global:Verdicts[$_].Estado }))
+}
+
 function Format-Orden([string]$Orden) {
     $o = ([string]$Orden).Trim()
     $pre = Get-PrefijoOrden
     if (-not $o -or -not $pre) { return $o }
     $letras = ($pre -replace '[^A-Za-z]', '')
-    if ($o -match '^\d+$') { return $pre + $o }
+    # solo números: es una orden si tiene los dígitos de una orden (5 o más); "4060" o "3090" son etiquetas de un modelo
+    if ($o -match '^\d+$') { if ($o.Length -ge (Get-OrdenMinDigitos)) { return $pre + $o } else { return $o } }
     if ($letras -and $o -match ('^(?i)' + [regex]::Escape($letras) + '[\s\-_#]*(\d+)$')) { return $pre + $Matches[1] }
     return $o
 }
 
-function Start-Equipo([string]$Orden, [string]$Tecnico) {
+function Start-Equipo([string]$Orden, [string]$Tecnico, [string]$Pieza = '', [bool]$Suelta = $false) {
     if ($Global:Started) { return }
     $Global:Ui.Busy = $true
     $Global:Ui.Task = 'Preparando el equipo'
     $Global:M.Orden = Format-Orden $Orden
+    $Global:M.Pieza = Format-Pieza $Pieza
+    $Global:M.Suelta = [bool]($Suelta -or $Global:M.Pieza)
+    Set-EsBanco $Global:M.Suelta
     $Global:M.Tecnico = $Tecnico.Trim()
     try {
         if ($Global:M.Tecnico) { New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null; $Global:M.Tecnico | Set-Content -Path (Join-Path $ReportDir '.ultimo_tecnico') -Encoding UTF8 }
@@ -5377,7 +5658,7 @@ function Invoke-UiCommand([string]$Json) {
     $c = $null
     try { $c = $Json | ConvertFrom-Json } catch { return }
     switch ([string]$c.cmd) {
-        'start' { Start-Equipo ([string]$c.orden) ([string]$c.tecnico) }
+        'start' { Start-Equipo ([string]$c.orden) ([string]$c.tecnico) ([string]$c.pieza) ([bool]$c.suelta) }
         'step' { if (-not $Global:Ui.Busy) { Invoke-Step ([string]$c.id) $c.opts } }
         'protocolo' { if ($Global:Started) { Invoke-UiProtocolo $c.opts } }
         'informe' { if ($Global:Started) { Invoke-UiInforme; if ($Global:InformeHtml) { Start-Process (Get-InformeParaAbrir) } } }
@@ -5385,6 +5666,7 @@ function Invoke-UiCommand([string]$Json) {
             switch ([string]$c.what) {
                 'informe' { if ($Global:InformeHtml -and (Test-Path $Global:InformeHtml)) { Start-Process (Get-InformeParaAbrir) } }
                 'txt' { if ($Global:ReportFile) { Start-Process notepad.exe $Global:ReportFile } }
+                'orden' { if ($Global:InformeOrdenPdf -and (Test-Path $Global:InformeOrdenPdf)) { Start-Process $Global:InformeOrdenPdf } }
                 'carpeta' { New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null; Start-Process explorer.exe $ReportDir }
                 'historial' { if (Test-Path $HistFile) { Start-Process $HistFile } }
                 'tecnicos' { Start-Process notepad.exe $TecnicosFile }
@@ -5618,6 +5900,7 @@ function Send-Informe($Rec) {
     $base = [IO.Path]::ChangeExtension($Global:InformeHtml, $null).TrimEnd('.')
     $files = @()
     foreach ($ext in '.json', '.html') { if (Test-Path ($base + $ext)) { $files += ($base + $ext) } }
+    foreach ($x in $Global:InformeOrdenHtml, $Global:InformeOrdenPdf) { if ($x -and (Test-Path $x)) { $files += $x } }
     if ($Global:InformePdf -and (Test-Path $Global:InformePdf)) { $files += $Global:InformePdf }
     $ok = $true
     for ($i = 0; $i -lt $files.Count; $i++) {
@@ -6238,9 +6521,16 @@ function Test-GpuIdentity {
             $gi['Chip'] = $chip; $gi['ChipNombre'] = $pci
             $key = Get-GpuModelKey $nombre
             $cands = @(Get-PciModelNames $pci)
-            if ($cands -contains $key) {
+            $coincide = ($cands -contains $key)
+            $compartido = ''
+            if (-not $coincide -and $ven -eq '1002') {
+                # AMD usa el mismo ID de chip para la versión XT y la común (solo cambia la revisión): RX 5500 / RX 5500 XT, etc.
+                $comun = $key -replace '\s(XTX|XT|GRE)$', ''
+                if ($comun -ne $key -and $cands -contains $comun) { $coincide = $true; $compartido = $comun }
+            }
+            if ($coincide) {
                 $gi['Coincide'] = $true
-                Set-Verdict 'GPU' 'OK' ("Identidad: el chip {0} corresponde a una {1}." -f $chip, $key)
+                Set-Verdict 'GPU' 'OK' ("Identidad: el chip {0} corresponde a una {1}{2}." -f $chip, $key, $(if ($compartido) { " (AMD usa el mismo ID que la $compartido)" } else { '' }))
             } else {
                 $gi['Coincide'] = $false
                 Set-Verdict 'GPU' 'ATENCION' ("El nombre que muestra Windows ({0}) NO coincide con el chip real de la placa ({1}). Posible placa adulterada (chip de otro modelo con BIOS o driver modificado): verificar con GPU-Z y mirar la placa." -f $nombre, $pci)
@@ -7000,6 +7290,12 @@ function Main {
     $Global:Cpu = Get-CpuInfo
     $pre = Get-PrefijoOrden
     $etq = Format-Orden (Read-Host ("Orden ({0}: solo los números) o etiqueta del equipo (Enter para omitir)" -f $(if ($pre) { $pre } else { 'sin prefijo' })))
+    $esBanco = Get-EsBanco
+    if (Ask-Yes '¿Es una placa de video suelta (esta PC es el banco de pruebas)?' $esBanco) {
+        $Global:M.Suelta = $true
+        $Global:M.Pieza = Format-Pieza (Read-Host 'Últimos 4 o 5 dígitos del N.º de serie de la placa (Enter para omitir)')
+    }
+    Set-EsBanco ([bool]$Global:M.Suelta)
     $tec = Select-Tecnico
     $Global:M.Orden = $etq
     $Global:M.Tecnico = $tec
