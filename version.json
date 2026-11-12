@@ -1,17 +1,22 @@
 {
-  "version": "2.11",
-  "fecha": "2026-11-11",
+  "version": "2.12",
+  "fecha": "2026-11-12",
   "cambios": [
-    "Varias placas del mismo cliente con un ticket cada una: en la segunda y las siguientes se carga \"va junto con el ticket de la primera\" y sale un informe único con todas comparadas, cada una con su ticket"
+    "Stress de GPU: vuelve la carga de la 2.8/2.9, que es la que da temperaturas como FurMark (la de la 2.10 levantaba el hotspot de más); solo se sube el tope de capas para las placas de gama alta",
+    "Enlace PCIe en Radeon: se lee del puerto de la mother y el reporte técnico muestra la cadena completa",
+    "Historial compartido: avisa bien cuando el NET-Receptor de la otra PC es viejo (hay que reinstalarlo una vez)",
+    "Hotspot: en Radeon el aviso usa su límite real (110 °C) y, si también hay diferencia alta con el núcleo, sale una sola observación",
+    "Informe de placa suelta: entra en una hoja (no repite modelo, fabricante ni la tabla de pruebas si todo dio bien)",
+    "En NVIDIA, si la carga informada da baja pero la placa llegó a su límite de potencia, ya no avisa"
   ],
   "archivos": [
     {
       "nombre": "NET-TestBench.ps1",
-      "sha256": "3B6FEE7BBB7163E5AF8DB5E3A13B3EE12EBD622D94E7ED7CC06111D36E36D5C9"
+      "sha256": "5F6374111AF291815DFF7810BB87B869C1925B0BCDFA28D29EEA7F9449DEC810"
     },
     {
       "nombre": "LEEME.txt",
-      "sha256": "8AB06FD1DB4A1E894BC1755F8CDBA7E3B21DCF90CD664205928CE5CAD9A4DB51"
+      "sha256": "5038C1CF68292EA7DEB69E4DA598EC9004F3176932E51C9E9AD98DC82BD17C04"
     }
   ]
 }

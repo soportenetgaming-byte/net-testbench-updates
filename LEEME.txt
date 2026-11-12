@@ -1,4 +1,4 @@
-﻿NET Gaming - Banco de pruebas (NET-TestBench) v2.11
+﻿NET Gaming - Banco de pruebas (NET-TestBench) v2.12
 ===================================================
 
 QUÉ ES

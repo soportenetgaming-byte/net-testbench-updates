@@ -1,5 +1,5 @@
 ﻿<#
-    NET Gaming - Banco de pruebas de hardware usado  (v2.11)
+    NET Gaming - Banco de pruebas de hardware usado  (v2.12)
     -------------------------------------------------------
     CPU, motherboard, RAM (inventario/slots) y discos (SMART, lectura, escritura+verificación).
     Correr como administrador (usar Iniciar-TestBench.bat).
@@ -21,7 +21,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$Version = '2.11'
+$Version = '2.12'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $IsWin = [Environment]::OSVersion.Platform -eq 'Win32NT'
 
@@ -3226,9 +3226,9 @@ function Compare-Historial([string]$Campo, [double]$Valor) {
     return [pscustomobject]@{ N = $vals.Count; Mediana = $med; Pct = 100 * $Valor / $med }
 }
 
-function Compare-HistorialPor([string]$ColClave, [string]$Clave, [string]$Campo, [double]$Valor) {
+function Compare-HistorialPor([string]$ColClave, [string]$Clave, [string]$Campo, [double]$Valor, [string]$SinCol = '') {
     if (-not $Clave -or $Valor -le 0) { return $null }
-    $rows = @(Get-Historial | Where-Object { $_.$ColClave -eq $Clave -and $_.Sesion -ne $Global:M.Sesion })
+    $rows = @(Get-Historial | Where-Object { $_.$ColClave -eq $Clave -and $_.Sesion -ne $Global:M.Sesion -and (-not $SinCol -or -not [string]$_.$SinCol) })
     $vals = @($rows | ForEach-Object { ConvertTo-Num $_.$Campo } | Where-Object { $_ -gt 0 } | Sort-Object)
     if (-not $vals.Count) { return $null }
     $med = $vals[[math]::Floor($vals.Count / 2)]
@@ -3301,7 +3301,7 @@ function Save-Historial {
         GpuFabricante = $Global:M.Gpu['Fabricante']
         GpuVbios     = $Global:M.Gpu['Vbios']
         GpuCoincide  = $Global:M.Gpu['Coincide']
-        GpuPuntaje2  = $Global:M.Gpu['Score']   # v2.10+: sin tope de capas ni de cuadros. GpuPuntaje (2.8-2.9) y GpuScore eran cargas anteriores, no comparables
+        GpuPuntaje   = $Global:M.Gpu['Score']   # carga tipo FurMark (v2.8+, salvo 2.10-2.11 que usaron GpuPuntaje2, no comparable); GpuScore era la carga anterior
         VramGBs      = $Global:M.Gpu['VramGBs']
         GpuDif       = $Global:M.Gpu['GpuDeltaMax']
         Resultado    = (Get-ResultadoSesion)
@@ -3376,7 +3376,14 @@ function Sync-Historial([switch]$Subir) {
         } catch {
             $code = 0
             try { $code = [int]$_.Exception.Response.StatusCode } catch {}
-            if ($code -eq 404) { Log ("  Historial compartido: el NET-Receptor de {0} es de una versión anterior. Reinstalarlo una vez (Instalar-Receptor.bat) para compartir el historial." -f $r.Nombre) 'Yellow' }
+            $cuerpo = [string]$_.ErrorDetails.Message
+            if (-not $cuerpo) { try { $rd = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream()); $cuerpo = $rd.ReadToEnd(); $rd.Dispose() } catch {} }
+            if (-not $Global:HistAvisos) { $Global:HistAvisos = @{} }
+            if ($Global:HistAvisos[$r.Nombre]) { continue }       # un solo aviso por PC en cada sesión
+            $Global:HistAvisos[$r.Nombre] = $true
+            # los NET-Receptor anteriores al 1.2 no conocen el historial y contestan 404 o 403 "solo desde esta PC"
+            if ($code -eq 404 -or ($code -eq 403 -and $cuerpo -notmatch 'clave')) { Log ("  Historial compartido: el NET-Receptor de '{0}' es de una versión anterior. Reinstalarlo una vez en esa PC (Instalar-Receptor.bat de la carpeta NET-Receptor) para compartir el historial." -f $r.Nombre) 'Yellow' }
+            elseif ($code -eq 403) { Log ("  Historial compartido: '{0}' rechazó la clave (revisar envio.txt y la del receptor)." -f $r.Nombre) 'Yellow' }
             else { Log ("  Historial compartido: no se pudo leer de {0} ({1})." -f $r.Nombre, $_.Exception.Message) 'DarkGray' }
             continue
         }
@@ -3434,7 +3441,7 @@ function Get-TempChartSvg($Serie) {
         }
         $pts += , $row
     }
-    $W = 640; $H = 190; $L = 36; $R = 12; $T = 10; $B = 26
+    $W = 640; $H = 160; $L = 36; $R = 12; $T = 10; $B = 26
     $vals = @(); foreach ($p in $pts) { foreach ($i in 1, 2, 3) { if ($null -ne $p[$i]) { $vals += [double]$p[$i] } } }
     if (-not $vals.Count) { return '' }
     $lo = [math]::Floor((($vals | Measure-Object -Minimum).Minimum - 3) / 10) * 10
@@ -3566,6 +3573,8 @@ footer { margin-top:26px; padding:16px 32px 22px; border-top:1px solid var(--lin
 @media (max-width:640px) { header.top, main, footer { padding-left:16px; padding-right:16px; } table.spec th { width:110px; } .cards { grid-template-columns:1fr; } header.top { flex-direction:column; align-items:flex-start; } .doc { text-align:left; } }
 @media print { body { background:#fff; } .page { box-shadow:none; margin:0; max-width:none; border-radius:0; }
   header.top, header.top::after, h2::before, .word span, .verdict, .chip, .obs li, .chart { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  main { padding:16px 28px 4px; } .verdict { padding:12px 16px; margin-bottom:14px; } h2 { margin:16px 0 8px; }
+  table.spec th, table.spec td { padding:4px 0; } footer { margin-top:14px; padding:10px 28px; }
   @page { size:A4; margin:10mm; } }
 '@
 
@@ -3710,7 +3719,12 @@ function Export-Informe {
                 if ($s -and $null -ne $s.VrmMax) { [void]$kv.Add(@('VRM máximo', ('{0:N0} °C' -f $s.VrmMax))) }
                 if ($s -and $null -ne $s.V12Min) { [void]$kv.Add(@('+12 V bajo carga', ('{0:N2} V' -f $s.V12Min))) }
             }
-            'GPU' { foreach ($x in @(Get-GpuKv $Global:M.Gpu ($e.GPU -join ' + '))) { [void]$kv.Add($x) } }
+            'GPU' {
+                foreach ($x in @(Get-GpuKv $Global:M.Gpu ($e.GPU -join ' + '))) {
+                    if ($suelta -and @('Modelo', 'Fabricante') -contains $x[0]) { continue }   # ya están en "Pieza probada"
+                    [void]$kv.Add($x)
+                }
+            }
         }
         $chart = if ($area -eq 'GPU') { Get-TempChartSvg $Global:M.Gpu['Serie'] } else { '' }
         [void]$sb.Append(('<div class="card{3}"><h3>{0}<span class="chip {1}">{2}</span></h3>' -f $areaNames[$area], $si.Cls, $si.Txt, $(if ($chart) { ' wide' } else { '' })))
@@ -3735,8 +3749,10 @@ function Export-Informe {
     }
     [void]$sb.Append('</div>')
 
-    # Pruebas realizadas
-    if ($Global:M.Pruebas.Count) {
+    # Pruebas realizadas. En una placa suelta, si todo dio bien, ya está en el recuadro de Video (duración y errores):
+    # no se repite, así el informe entra en una hoja.
+    $mostrarPruebas = $Global:M.Pruebas.Count -and (-not $suelta -or @($Global:M.Pruebas | Where-Object { [string]$_.Resultado -ne 'OK' }).Count)
+    if ($mostrarPruebas) {
         [void]$sb.Append('<h2>Pruebas realizadas</h2><table class="tests"><tr><th>Prueba</th><th>Duración</th><th>Resultado</th></tr>')
         foreach ($p in $Global:M.Pruebas) {
             $cls = if ($p.Resultado -match 'FALLA|error') { 'fail' } elseif ($p.Resultado -match 'ATENCI|observ|cancel') { 'warn' } else { 'ok' }
@@ -3972,10 +3988,10 @@ $GpuStressHtml = @'
   var q = new URLSearchParams(location.search);
   var DURATION = Math.max(10, (parseFloat(q.get("min")) || 10) * 60) * 1000;
   var SIMERR = q.get("simerr") === "1";          // solo para probar la detección
-  // MAX_PASSES alto: con 400 las placas de gama alta (4070 Ti para arriba) no llegaban al 100%.
-  // LOTE: las capas se dibujan de a tandas en una sola orden (instancias), así el procesador del banco no limita a la placa.
-  var CHECK_EVERY = 3000, CHECK_SIZE = 256, CHECK_LAYERS = 48, MAX_PASSES = 8000, LOTE = 64, NOISE = 2048;
-  var FPS_ALTO = 45, FPS_BAJO = 22;   // más capas mientras pase de 45 cuadros/s; menos si baja de 22
+  // Hasta DIRECTAS capas, cada capa es una orden de dibujo (la carga de siempre, calibrada contra FurMark).
+  // Las placas de gama alta necesitan más capas para llegar al 100%: de ahí en adelante se dibujan de a tandas,
+  // para que el procesador del banco no sea el límite. El tope anterior (400) dejaba cortas a una 5080 o una 4070 Ti.
+  var CHECK_EVERY = 3000, CHECK_SIZE = 256, CHECK_LAYERS = 48, DIRECTAS = 400, MAX_PASSES = 6000, NOISE = 2048;
 
   var t0 = performance.now(), scoreSum = 0, scoreN = 0;
   var st = { score: 0, state: "starting", elapsed: 0, duration: DURATION / 1000, fps: 0, passes: 1, checks: 0, errors: 0,
@@ -4003,15 +4019,14 @@ $GpuStressHtml = @'
     finish("La GPU dejó de responder y el driver se reinició (contexto perdido).");
   });
 
-  var VS = "#version 300 es\nin vec2 p; uniform float base; flat out float layer; void main(){ layer = base + float(gl_InstanceID); gl_Position = vec4(p, 0.0, 1.0); }";
+  var VS = "#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }";
   // Carga tipo FurMark / juego: capas de "pelo" semitransparentes una arriba de otra. Usa a la vez
   // texturas (con caché y memoria), cálculo de iluminación y mezcla de colores (ROPs), así el calor se
   // reparte por el chip como en un juego exigente y no se concentra solo en los núcleos de cálculo.
   var FS = [
     "#version 300 es",
     "precision highp float;",
-    "uniform vec2 res; uniform float t; uniform float nl; uniform sampler2D noise;",
-    "flat in float layer;",
+    "uniform vec2 res; uniform float t; uniform float layer; uniform float nl; uniform sampler2D noise;",
     "out vec4 o;",
     "void main(){",
     "  vec2 uv = gl_FragCoord.xy / res.y;",
@@ -4047,16 +4062,28 @@ $GpuStressHtml = @'
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
     return p;
   }
-  var prog;
+  // Variante por tandas (instancias): mismo cálculo, la capa sale del número de instancia
+  var VS_T = "#version 300 es\nin vec2 p; uniform float base; flat out float layer; void main(){ layer = base + float(gl_InstanceID); gl_Position = vec4(p, 0.0, 1.0); }";
+  var FS_T = FS.replace("uniform float layer; ", "").replace("out vec4 o;", "flat in float layer;\nout vec4 o;");
+  function programT() {
+    var p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, VS_T)); gl.attachShader(p, compile(gl.FRAGMENT_SHADER, FS_T));
+    gl.bindAttribLocation(p, 0, "p"); gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    return p;
+  }
+  var prog, progT = null;
   try { prog = program(FS); }
   catch (e) { finish("No se pudo compilar el shader: " + e.message); return; }
+  try { progT = programT(); } catch (e) { progT = null; MAX_PASSES = DIRECTAS; }
 
   var vb = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, vb);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-  var U = {}; ["res", "t", "base", "nl", "noise"].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+  var U = {}; ["res", "t", "layer", "nl", "noise"].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+  var UT = {}; if (progT) ["res", "t", "base", "nl", "noise"].forEach(function (n) { UT[n] = gl.getUniformLocation(progT, n); });
 
   // Textura de ruido fija (siempre la misma, para que la verificación sea reproducible), con mipmaps
   var noiseTex = (function () {
@@ -4099,11 +4126,17 @@ $GpuStressHtml = @'
     gl.viewport(0, 0, w, h);
     gl.disable(gl.BLEND);
     gl.clearColor(0.03, 0.02, 0.04, 1); gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.useProgram(prog);
+    var tandas = capas > DIRECTAS && progT, u = tandas ? UT : U;
+    gl.useProgram(tandas ? progT : prog);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, noiseTex);
-    gl.uniform1i(U.noise, 0); gl.uniform2f(U.res, w, h); gl.uniform1f(U.t, t); gl.uniform1f(U.nl, capas);
+    gl.uniform1i(u.noise, 0); gl.uniform2f(u.res, w, h); gl.uniform1f(u.t, t); gl.uniform1f(u.nl, capas);
     gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    for (var i = 0; i < capas; i += LOTE) { gl.uniform1f(U.base, i); gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, Math.min(LOTE, capas - i)); }
+    var i;
+    if (!tandas) { for (i = 0; i < capas; i++) { gl.uniform1f(U.layer, i); gl.drawArrays(gl.TRIANGLES, 0, 3); } }
+    else {
+      var lote = Math.ceil(capas / DIRECTAS);      // nunca más de DIRECTAS órdenes de dibujo por cuadro
+      for (i = 0; i < capas; i += lote) { gl.uniform1f(UT.base, i); gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, Math.min(lote, capas - i)); }
+    }
     gl.disable(gl.BLEND);
   }
 
@@ -4133,32 +4166,19 @@ $GpuStressHtml = @'
 
   t0 = performance.now(); var lastCheck = t0, lastSec = t0, frames = 0, passes = 8, running = true;
   st.state = "running";
-  // Cuadros en vuelo: se manda un cuadro nuevo solo cuando la GPU terminó alguno de los anteriores (hasta 2 en cola).
-  // Así la placa nunca se queda esperando al monitor ni al procesador, y los cuadros/s son los que realmente dibujó.
-  var pend = [];
-  function gpuLibre(now) {
-    while (pend.length && (gl.getSyncParameter(pend[0].s, gl.SYNC_STATUS) === gl.SIGNALED || now - pend[0].t > 3000)) gl.deleteSync(pend.shift().s);
-    return pend.length < 2;
-  }
-  function frame() {
+  function frame(now) {
     if (!running) return;
-    var now = performance.now();   // el reloj real: sin tope de cuadros, la hora que pasa el navegador a esta función no es confiable
     if (gl.isContextLost()) return;
-    var dibujo = gpuLibre(now);
-    if (dibujo) {
-      resize();
-      drawFur(null, W, H, (now - t0) / 1000, passes);
-      var sy = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-      gl.flush();
-      if (sy) pend.push({ s: sy, t: now });
-      frames++;
-      if (now - lastCheck >= CHECK_EVERY) { lastCheck = now; check(); }
-    }
+    resize();
+    drawFur(null, W, H, (now - t0) / 1000, passes);
+    frames++;
+
+    if (now - lastCheck >= CHECK_EVERY) { lastCheck = now; check(); }
     if (now - lastSec >= 1000) {
       var fps = frames * 1000 / (now - lastSec); frames = 0; lastSec = now;
-      // carga adaptativa: más capas hasta que la GPU no pueda pasar de 45 cuadros/s (= GPU al 100%)
-      if (fps > FPS_ALTO && passes < MAX_PASSES) passes = Math.min(MAX_PASSES, Math.ceil(passes * (fps > FPS_ALTO * 2 ? 1.6 : 1.25)) + 1);
-      else if (fps < FPS_BAJO && passes > 1) passes = Math.max(1, Math.floor(passes * 0.8));
+      // carga adaptativa: más capas hasta que la GPU no llegue a los 60 cuadros (= GPU al 100%)
+      if (fps > 52 && passes < MAX_PASSES) passes = Math.min(MAX_PASSES, Math.ceil(passes * 1.25) + 1);
+      else if (fps < 35 && passes > 1) passes = Math.max(1, Math.floor(passes * 0.8));
       st.fps = Math.round(fps * 10) / 10; st.passes = passes; st.elapsed = Math.round((now - t0) / 1000);
       if (now - t0 > Math.min(30000, DURATION * 0.3)) {      // puntaje: recién cuando la carga se estabilizó
         scoreSum += fps * passes * W * H / 1e6; scoreN++;
@@ -4167,8 +4187,7 @@ $GpuStressHtml = @'
       ui(); post("/status");
     }
     if (now - t0 >= DURATION) { finish(null); return; }
-    // si la GPU todavía está ocupada se espera un instante, sin dejar al procesador girando en vacío
-    if (dibujo) requestAnimationFrame(frame); else setTimeout(frame, 2);
+    requestAnimationFrame(frame);
   }
   function fmt(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2); }
   function ui() {
@@ -4319,23 +4338,34 @@ function Get-GpuLinks {
         $l = Get-PciLinkProps $id
         if (-not $l) { continue }
         $fuente = 'Windows'
+        $cadena = ''
         if ($id -match '^PCI\\VEN_1002') {
             # Radeon RX 5000 en adelante: el chip cuelga de un puente que trae la propia placa, y su enlace con ese puente
-            # siempre figura al máximo (x16 Gen4/Gen5). El enlace real con la mother es el del puente de más arriba.
+            # siempre figura al máximo (x16 Gen4/Gen5). El enlace real es el del puerto de la mother con la placa.
+            $nodos = @(@{ Id = $id; L = $l })
             $cur = $id
-            for ($n = 0; $n -lt 3; $n++) {
+            for ($n = 0; $n -lt 5; $n++) {
                 $par = $null
                 try { $par = [string](Get-PnpDeviceProperty -InstanceId $cur -KeyName 'DEVPKEY_Device_Parent' -ErrorAction Stop).Data } catch {}
-                if (-not $par -or $par -notmatch '^PCI\\VEN_1002') { break }
-                $pl = Get-PciLinkProps $par
-                if ($pl) { $l = $pl; $fuente = 'puente de la placa' }
+                if (-not $par -or $par -notlike 'PCI\*') { break }
+                $nodos += @{ Id = $par; L = (Get-PciLinkProps $par) }
                 $cur = $par
+                if ($par -notmatch '^PCI\\VEN_1002') { break }      # ya es el puerto de la mother
             }
+            $cadena = (@($nodos | ForEach-Object { $x = $_; $v = if ($x.Id -match 'VEN_([0-9A-F]{4})&DEV_([0-9A-F]{4})') { $Matches[1] + ':' + $Matches[2] } else { '?' }; if ($x.L) { '{0} x{1}/x{2} {3}/{4}' -f $v, $x.L.Cw, $x.L.Mw, (Get-PcieGen $x.L.Cs), (Get-PcieGen $x.L.Ms) } else { "$v sin datos" } }) -join '  <-  ')
+            $amd = @($nodos | Select-Object -Skip 1 | Where-Object { $_.Id -match '^PCI\\VEN_1002' -and $_.L })
+            $raiz = @($nodos | Select-Object -Skip 1 | Where-Object { $_.Id -notmatch '^PCI\\VEN_1002' -and $_.L }) | Select-Object -First 1
+            if ($raiz -and $nodos.Count -ge 3) {
+                # lo negociado lo dice el puerto de la mother; lo máximo de la placa, su puente de entrada (si Windows lo informa)
+                $tope = if ($amd.Count) { $amd[-1].L } else { $null }
+                $l = @{ Cw = $raiz.L.Cw; Cs = $raiz.L.Cs; Mw = $(if ($tope) { $tope.Mw } else { $raiz.L.Cw }); Ms = $(if ($tope) { $tope.Ms } else { $raiz.L.Cs }) }
+                $fuente = 'puerto de la mother'
+            } elseif ($amd.Count) { $l = $amd[-1].L; $fuente = 'puente de la placa' }
         } elseif ($id -match '^PCI\\VEN_10DE&DEV_([0-9A-F]{4})') {
             $nl = Get-NvidiaLink $Matches[1]
             if ($nl) { $l.Cs = $nl.Cs; $l.Cw = $nl.Cw; $fuente = 'driver NVIDIA' }
         }
-        $out += [pscustomobject]@{ Nombre = Get-Clean $d.FriendlyName; Cw = $l.Cw; Mw = $l.Mw; Cs = $l.Cs; Ms = $l.Ms; Fuente = $fuente }
+        $out += [pscustomobject]@{ Nombre = Get-Clean $d.FriendlyName; Cw = $l.Cw; Mw = $l.Mw; Cs = $l.Cs; Ms = $l.Ms; Fuente = $fuente; Cadena = $cadena }
     }
     return $out
 }
@@ -4390,28 +4420,42 @@ function Show-GpuSensorStats($St, [string]$Contexto) {
     }
     # Diferencia núcleo/hotspot con el stress tipo FurMark. Con 2+ placas del mismo chip en el historial
     # se compara contra ellas (lo más justo); si no, límites fijos.
+    # Hotspot alto. Radeon: el límite (Tjunction) es 110 °C, ahí baja la velocidad. NVIDIA no publica uno; más de 105 °C es mucho.
+    $esAmd = [string]$Global:M.Gpu['DevId'] -like '1002*'
+    $hotTxt = ''
+    if (-not $rtx50 -and $null -ne $St.GpuHotMax -and $St.GpuHotMax -ge 105 -and -not $Global:AvisosSensor['gpuhot']) {
+        $Global:AvisosSensor['gpuhot'] = $true
+        $hotTxt = if (-not $esAmd) { 'el hotspot llegó a {0:N0} °C, muy alto' -f $St.GpuHotMax }
+                  elseif ($St.GpuHotMax -ge 109) { 'el hotspot llegó a {0:N0} °C, el límite de la placa (110 °C), donde baja la velocidad' -f $St.GpuHotMax }
+                  else { 'el hotspot llegó a {0:N0} °C, cerca del límite de la placa (110 °C)' -f $St.GpuHotMax }
+    }
+    $hotUsado = $false
     if (-not $rtx50 -and $Contexto -notmatch 'VRAM' -and $null -ne $St.GpuDeltaMax -and -not $Global:AvisosSensor['gpudelta']) {
         $d = [double]$St.GpuDeltaMax
-        $ref = Compare-HistorialPor 'GpuDev' ([string]$Global:M.Gpu['DevId']) 'GpuDif' 1
+        $y = if ($hotTxt) { ', y ' + $hotTxt } else { '' }
+        # las placas probadas con la 2.10/2.11 (GpuPuntaje2) tuvieron otro stress, con más hotspot: no se comparan
+        $ref = Compare-HistorialPor 'GpuDev' ([string]$Global:M.Gpu['DevId']) 'GpuDif' 1 'GpuPuntaje2'
         if ($ref -and $ref.N -ge 2) {
             $med = [double]$ref.Mediana
             Log ("  Diferencia núcleo/hotspot: {0:N0} °C; en {1} placa(s) con el mismo chip la mediana es {2:N0} °C." -f $d, $ref.N, $med)
             if ($d -ge 20 -and $d -ge $med + 8) {
                 $Global:AvisosSensor['gpudelta'] = $true
-                Set-Verdict 'GPU' 'ATENCION' ("Diferencia de {0:N0} °C entre el núcleo y el punto más caliente (hotspot), {1:N0} °C más que otras placas con el mismo chip: típico de pasta térmica seca o disipador que no apoya parejo." -f $d, ($d - $med))
+                Set-Verdict 'GPU' 'ATENCION' ("Diferencia de {0:N0} °C entre el núcleo y el punto más caliente (hotspot), {1:N0} °C más que otras placas con el mismo chip{2}: típico de pasta térmica seca o disipador que no apoya parejo." -f $d, ($d - $med), $y)
+                $hotUsado = [bool]$hotTxt
             } elseif ($d -ge 20 -and $d -ge $med + 5) {
                 Set-Verdict 'GPU' 'INFO' ("Diferencia núcleo/hotspot de {0:N0} °C, algo más alta que en otras placas con el mismo chip ({1:N0} °C)." -f $d, $med)
             }
         } elseif ($d -ge 28) {
             $Global:AvisosSensor['gpudelta'] = $true
-            Set-Verdict 'GPU' 'ATENCION' ("Diferencia de {0:N0} °C entre el núcleo y el punto más caliente (hotspot): típico de pasta térmica seca o disipador que no apoya parejo." -f $d)
+            Set-Verdict 'GPU' 'ATENCION' ("Diferencia de {0:N0} °C entre el núcleo y el punto más caliente (hotspot){1}: típico de pasta térmica seca o disipador que no apoya parejo." -f $d, $y)
+            $hotUsado = [bool]$hotTxt
         } elseif ($d -ge 22) {
             Set-Verdict 'GPU' 'INFO' ("Diferencia núcleo/hotspot de {0:N0} °C: un poco alta. Si en FurMark da menos de 20 °C, la pasta está bien; si da más, revisar pasta y montaje." -f $d)
         }
     }
-    if (-not $rtx50 -and $null -ne $St.GpuHotMax -and $St.GpuHotMax -ge 105 -and -not $Global:AvisosSensor['gpuhot']) {
-        $Global:AvisosSensor['gpuhot'] = $true
-        Set-Verdict 'GPU' 'ATENCION' ("El hotspot de la GPU llegó a {0:N0} °C: la placa baja la velocidad para protegerse. Revisar pasta y montaje del disipador." -f $St.GpuHotMax)
+    if ($hotTxt -and -not $hotUsado) {
+        $t = $hotTxt.Substring(0, 1).ToUpper() + $hotTxt.Substring(1)
+        Set-Verdict 'GPU' 'ATENCION' ("{0}. Revisar pasta y montaje del disipador." -f $t)
     }
     # Memoria de video: memtest_vulkan la usa al 100% (lectura/escritura continua de toda la VRAM, como
     # minar) y la calienta mucho más que un juego o el stress. GDDR6X empieza a bajar velocidad a ~110 °C.
@@ -4560,8 +4604,7 @@ function Invoke-GpuStress([int]$Minutes) {
     $url = "http://127.0.0.1:$port/?min=$Minutes"
     $bargs = @("--user-data-dir=`"$prof`"", '--no-first-run', '--no-default-browser-check', '--start-fullscreen', '--new-window',
         '--force_high_performance_gpu', '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-        '--disable-backgrounding-occluded-windows', '--autoplay-policy=no-user-gesture-required',
-        '--disable-gpu-vsync', '--disable-frame-rate-limit', $url)   # sin tope de cuadros: la GPU trabaja al 100% y no espera al monitor
+        '--disable-backgrounding-occluded-windows', '--autoplay-policy=no-user-gesture-required', $url)
     Set-Marker ("Stress de GPU ({0} min)" -f $Minutes)
     $t0 = Get-Date
     $bp = $null
@@ -4650,6 +4693,7 @@ function Invoke-GpuStress([int]$Minutes) {
     if ($links) {
         foreach ($l in $links) {
             Log ("Enlace PCIe bajo carga: {0} x{1}/x{2} {3}/{4} (leído de: {5})" -f $l.Nombre, $l.Cw, $l.Mw, (Get-PcieGen $l.Cs), (Get-PcieGen $l.Ms), $l.Fuente)
+            if ($l.Cadena) { Log ("  Cadena PCIe (placa <- puentes <- mother): {0}" -f $l.Cadena) 'DarkGray' }
             if ($l.Nombre -match $IntegradaRegex) { continue }
             $Global:M.Gpu['Enlace'] = ("x{0} {1}" -f $l.Cw, (Get-PcieGen $l.Cs))
             $apu8000 = $Global:Cpu -and $Global:Cpu.Nombre -match 'Ryzen \d 8\d{3}G'
@@ -4661,7 +4705,13 @@ function Invoke-GpuStress([int]$Minutes) {
         }
     }
     if ($stats.GpuLoadN -and ($stats.GpuLoadSum / $stats.GpuLoadN) -lt 80 -and $st -and -not $st.aborted) {
-        Set-Verdict 'GPU' 'INFO' ("La GPU promedió {0:N0}% de carga en el stress (lo ideal es más de 90%)." -f ($stats.GpuLoadSum / $stats.GpuLoadN))
+        # en NVIDIA el porcentaje de carga suele marcar de menos con esta prueba: lo que vale es si llegó a su límite de potencia
+        $pot = $Global:M.Gpu['PotDef']
+        if ($pot -and $null -ne $stats.GpuPowerMax -and $stats.GpuPowerMax -ge 0.9 * $pot) {
+            Log ("  Carga informada {0:N0}%, pero la placa trabajó a su límite de potencia ({1:N0} de {2:N0} W): la prueba la exigió al máximo." -f ($stats.GpuLoadSum / $stats.GpuLoadN), $stats.GpuPowerMax, $pot) 'DarkGray'
+        } else {
+            Set-Verdict 'GPU' 'INFO' ("La GPU promedió {0:N0}% de carga en el stress (lo ideal es más de 90%)." -f ($stats.GpuLoadSum / $stats.GpuLoadN))
+        }
     }
     Show-GpuSensorStats $stats 'stress de GPU'
     if ($serie.Count -ge 3) {
@@ -4676,7 +4726,7 @@ function Invoke-GpuStress([int]$Minutes) {
     if ($st -and $completo -and -not $stopped -and $st.score -and -not $st.aborted -and -not $st.error -and $st.renderer -notmatch 'SwiftShader|llvmpipe|Basic Render') {
         $Global:M.Gpu['Score'] = [int]$st.score
         Log ("  Puntaje del stress: {0:N0} (trabajo por segundo, independiente de la resolución)" -f $st.score)
-        $cmp = Show-ComparacionGpu 'GpuPuntaje2' ([double]$st.score) 'Rendimiento de la GPU'
+        $cmp = Show-ComparacionGpu 'GpuPuntaje' ([double]$st.score) 'Rendimiento de la GPU'
         if ($cmp) { $Global:M.Gpu['VsHist'] = @{ Pct = [math]::Round($cmp.Pct); N = $cmp.N } }
     }
     $Global:M.Gpu['Reinicios'] = $resets.Count
@@ -4714,7 +4764,7 @@ function Invoke-PruebaFuente([int]$Minutes = 10) {
     $url = "http://127.0.0.1:$port/?min=$Minutes"
     $bargs = @("--user-data-dir=`"$prof`"", '--no-first-run', '--no-default-browser-check', '--start-fullscreen', '--new-window',
         '--force_high_performance_gpu', '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-        '--disable-backgrounding-occluded-windows', '--disable-gpu-vsync', '--disable-frame-rate-limit', $url)
+        '--disable-backgrounding-occluded-windows', $url)
     $bp = $null
     try { $bp = Start-Process -FilePath $browser -ArgumentList $bargs -PassThru } catch { Log ("  No se pudo abrir el navegador: {0}" -f $_.Exception.Message) 'Yellow' }
     $cpuArrancado = $false; $st = $null; $stopped = $false; $corte = ''; $resets = @(); $whea = 0
